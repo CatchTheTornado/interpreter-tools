@@ -25,6 +25,14 @@ A TypeScript library for executing code in isolated Docker containers. This tool
 
 ## Installation
 
+Simply install the package:
+
+```bash
+yarn add interpreter-tools
+```
+
+## Local development setup
+
 1. Clone the repository:
 ```bash
 git clone https://github.com/CatchTheTornado/interpreter-tools.git
@@ -44,6 +52,16 @@ yarn build
 ## Usage
 
 ### Basic JavaScript Example
+
+```bash
+mkdir basic
+cd basic
+npm install interpreter-tools
+# or yarn add interpreter-tools
+nano basic-usage.js
+```
+
+Paste the code:
 
 ```typescript
 import { ExecutionEngine, ContainerStrategy } from 'interpreter-tools';
@@ -94,57 +112,60 @@ console.log('Average:', average);
 main();
 ```
 
+Then run it:
+
+```bash
+node basic-usage.js
+```
+
 ### Using with Vercel AI
 
 The library includes a Vercel AI compatible tool for executing code. Here's how to use it:
 
+```bash
+mkdir ai-tool-example
+cd ai-tool-example
+npm install interpreter-tools
+# or yarn add interpreter-tools
+nano ai-tool-example.js
+```
+
 ```typescript
-import { generateText } from '@vercel/ai';
-import { codeExecutionTool } from './src/ai-tool';
+import { generateText } from 'ai';
+import { openai } from "@ai-sdk/openai";
+import { codeExecutionTool } from '../src/ai-tool';
 
 async function main() {
   try {
-    // Use the code execution tool with Vercel AI
+    // Use generateText with codeExecutionTool to generate and execute Fibonacci code
     const result = await generateText({
-      model: 'gpt-4',
+      model: openai('gpt-4o'),
+      maxSteps: 10,
       messages: [
         {
           role: 'user',
-          content: 'Write a Python function to calculate the Fibonacci sequence up to n numbers.'
+          content: 'Write a Python function to calculate the Fibonacci sequence up to n numbers and print the result. Make sure to include a test case that prints the first 10 numbers. Print the code and call the tool to execute it and print the result.'
         }
       ],
-      tools: [codeExecutionTool],
-      tool_choice: 'auto'
+      tools: { codeExecutionTool },
+      toolChoice: 'auto'
     });
 
-    console.log('AI Response:', result);
+    console.log('AI Response:', result.text);
+    console.log('AI Tool Results:', result.toolResults);
 
-    // You can also use the tool directly
-    const executionResult = await codeExecutionTool.execute({
-      language: 'python',
-      code: `
-def fibonacci(n):
-    a, b = 0, 1
-    sequence = []
-    for _ in range(n):
-        sequence.append(a)
-        a, b = b, a + b
-    return sequence
-
-# Test the function
-result = fibonacci(10)
-print('Fibonacci sequence:', result)
-      `,
-      dependencies: []
-    });
-
-    console.log('Execution Result:', executionResult);
   } catch (error) {
     console.error('Error:', error);
   }
 }
 
-main();
+main(); 
+```
+
+Then run it:
+
+```bash
+node ai-tool-example.js
 ```
 
 The AI tool supports the following parameters:
@@ -165,27 +186,11 @@ Reuses the same container for all executions within a session. Good for running 
 ### POOL
 Maintains a pool of containers that are reused across executions. Ideal for high-throughput scenarios.
 
-## Dependencies
-
-### Runtime Dependencies
-- `dockerode`: ^4.0.0 - Docker API client for Node.js
-- `uuid`: ^9.0.0 - UUID generation
-- `adm-zip`: ^0.5.10 - ZIP file handling
-- `@vercel/ai`: ^3.0.0 - Vercel AI SDK
-- `zod`: ^3.22.4 - Schema validation
-
-### Development Dependencies
-- `typescript`: ^5.3.3
-- `ts-node`: ^10.9.2
-- `@types/node`: ^20.11.0
-- `@types/dockerode`: ^3.3.23
-- `@types/uuid`: ^9.0.7
-- `@types/adm-zip`: ^0.5.5
 
 ## Security Considerations
 
 - Containers run with limited privileges
-- Network access is restricted by default
+- Network access is in the `bridge` mode by default
 - Resource limits are enforced (CPU, memory)
 - File system access is controlled through mounts
 

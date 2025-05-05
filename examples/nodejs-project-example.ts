@@ -1,6 +1,6 @@
 import { generateText } from 'ai';
 import { openai } from "@ai-sdk/openai";
-import { codeExecutionTool } from '../src/ai-tool';
+import { createCodeExecutionTool } from '../src/ai-tool';
 import * as fs from 'fs';
 import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
@@ -29,7 +29,7 @@ file contents
 Separate each file with a blank line.`
         }
       ],
-      tools: { codeExecutionTool },
+      tools: { codeExecutionTool: createCodeExecutionTool() },
       toolChoice: 'auto'
     });
 
@@ -59,12 +59,23 @@ Separate each file with a blank line.`
 
     console.log('** Created files:', files.map(f => f.name).join(', '));
 
+    // Create a code execution tool with the project directory mounted
+    const codeExecutionTool = createCodeExecutionTool({
+      mounts: [{
+        type: 'directory',
+        source: projectDir,
+        target: '/project'
+      }]
+    });
+
     // Execute the project using codeExecutionTool
     const executionResult = await codeExecutionTool.execute({
       language: 'javascript',
-      code: 'node server.js',
+      code: '',
+      runApp: {
+        entryFile: 'project/server.js'
+      },
       dependencies: ['express']
-      
     });
 
     console.log('Project Execution Result:');

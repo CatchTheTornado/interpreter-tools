@@ -132,51 +132,72 @@ export class ExecutionEngine {
     const startTime = Date.now();
     let command: string[];
 
-    // Write code directly to workspace
-    const writeExec = await container.exec({
-      Cmd: ['sh', '-c', `cat > /workspace/code.py << 'EOL'
+    if (options.runApp) {
+      // For running entire applications, we don't need to write the code file
+      // as it's already in the mounted directory
+      switch (options.language) {
+        case 'typescript':
+          command = ['sh', '-c', `yarn install && npx ts-node ${options.runApp.entryFile}`];
+          break;
+        case 'javascript':
+          command = ['sh', '-c', `yarn install && node ${options.runApp.entryFile}`];
+          break;
+        case 'python':
+          command = ['sh', '-c', `if [ -f requirements.txt ]; then pip install -r requirements.txt 2>/dev/null; fi && python ${options.runApp.entryFile}`];
+          break;
+        case 'shell':
+          command = ['sh', '-c', `chmod +x ${options.runApp.entryFile} && ./${options.runApp.entryFile}`];
+          break;
+        default:
+          throw new Error(`Unsupported language: ${options.language}`);
+      }
+    } else {
+      // Write code directly to workspace
+      const writeExec = await container.exec({
+        Cmd: ['sh', '-c', `cat > /workspace/code.py << 'EOL'
 ${options.code.trim()}
 EOL`],
-      AttachStdout: true,
-      AttachStderr: true
-    });
-    await writeExec.start({ hijack: true, stdin: false });
-
-    // List workspace contents only in verbose mode
-    if (options.verbose) {
-      const lsExec = await container.exec({
-        Cmd: ['ls', '-la', '/workspace'],
         AttachStdout: true,
         AttachStderr: true
       });
-      const lsStream = await lsExec.start({ hijack: true, stdin: false });
-      await new Promise((resolve) => {
-        let output = '';
-        container.modem.demuxStream(lsStream as Duplex, {
-          write: (chunk: Buffer) => {
-            output += chunk.toString();
-            console.log('Workspace contents:', output);
-          }
-        }, process.stderr);
-        lsStream.on('end', resolve);
-      });
-    }
+      await writeExec.start({ hijack: true, stdin: false });
 
-    switch (options.language) {
-      case 'typescript':
-        command = ['sh', '-c', 'yarn install && npx ts-node code.ts'];
-        break;
-      case 'javascript':
-        command = ['sh', '-c', 'yarn install && node code.js'];
-        break;
-      case 'python':
-        command = ['sh', '-c', 'if [ -f requirements.txt ]; then pip install -r requirements.txt 2>/dev/null; fi && python code.py'];
-        break;
-      case 'shell':
-        command = ['sh', '-c', './code.sh'];
-        break;
-      default:
-        throw new Error(`Unsupported language: ${options.language}`);
+      // List workspace contents only in verbose mode
+      if (options.verbose) {
+        const lsExec = await container.exec({
+          Cmd: ['ls', '-la', '/workspace'],
+          AttachStdout: true,
+          AttachStderr: true
+        });
+        const lsStream = await lsExec.start({ hijack: true, stdin: false });
+        await new Promise((resolve) => {
+          let output = '';
+          container.modem.demuxStream(lsStream as Duplex, {
+            write: (chunk: Buffer) => {
+              output += chunk.toString();
+              console.log('Workspace contents:', output);
+            }
+          }, process.stderr);
+          lsStream.on('end', resolve);
+        });
+      }
+
+      switch (options.language) {
+        case 'typescript':
+          command = ['sh', '-c', 'yarn install && npx ts-node code.ts'];
+          break;
+        case 'javascript':
+          command = ['sh', '-c', 'yarn install && node code.js'];
+          break;
+        case 'python':
+          command = ['sh', '-c', 'if [ -f requirements.txt ]; then pip install -r requirements.txt 2>/dev/null; fi && python code.py'];
+          break;
+        case 'shell':
+          command = ['sh', '-c', './code.sh'];
+          break;
+        default:
+          throw new Error(`Unsupported language: ${options.language}`);
+      }
     }
 
     return new Promise((resolve, reject) => {

@@ -1,5 +1,6 @@
 import { ExecutionEngine, ContainerStrategy } from './index';
 import { z } from 'zod';
+import { ContainerMount } from './types';
 
 interface CodeExecutionResult {
   stdout: string;
@@ -14,41 +15,56 @@ const codeExecutionSchema = z.object({
   dependencies: z.array(z.string()).optional().describe('Optional list of dependencies to install.'),
   strategy: z.enum(['per_execution', 'pool', 'per_session']).optional().describe('Container strategy to use.'),
   environment: z.record(z.string()).optional().describe('Environment variables to set in the container.'),
+  runApp: z.object({
+    entryFile: z.string().describe('Path to the entry file relative to the mounted directory')
+  }).optional().describe('Optional configuration for running an entire application')
 });
 
-export const codeExecutionTool = {
-  description: 'Executes code in an isolated Docker container with support for multiple languages.',
-  parameters: codeExecutionSchema,
-  execute: async ({ 
-    code, 
-    language, 
-    dependencies = [], 
-    strategy = 'per_execution',
-    environment = {}
-  }: z.infer<typeof codeExecutionSchema>): Promise<CodeExecutionResult> => {
-    const engine = new ExecutionEngine();
+interface CodeExecutionToolConfig {
+  mounts?: ContainerMount[];
+}
 
-    try {
-      const sessionId = await engine.createSession({
-        strategy: ContainerStrategy[strategy.toUpperCase() as keyof typeof ContainerStrategy],
-        containerConfig: {
-          image: getImageForLanguage(language),
-          environment
-        }
-      });
+export function createCodeExecutionTool(config: CodeExecutionToolConfig = {}) {
+  return {
+    description: 'Executes code in an isolated Docker container with support for multiple languages.',
+    parameters: codeExecutionSchema,
+    execute: async ({ 
+      code, 
+      language, 
+      dependencies = [], 
+      strategy = 'per_execution',
+      environment = {},
+      runApp
+    }: z.infer<typeof codeExecutionSchema>): Promise<CodeExecutionResult> => {
+      const engine = new ExecutionEngine();
 
-      const result = await engine.executeCode(sessionId, {
-        language,
-        code,
-        dependencies
-      });
+      try {
+        const sessionId = await engine.createSession({
+          strategy: ContainerStrategy[strategy.toUpperCase() as keyof typeof ContainerStrategy],
+          containerConfig: {
+            image: getImageForLanguage(language),
+            environment,
+            mounts: config.mounts
+          }
+        });
 
-      return result;
-    } finally {
-      await engine.cleanup();
+        const result = await engine.executeCode(sessionId, {
+          language,
+          code,
+          dependencies,
+          runApp
+        });
+
+        return result;
+      } finally {
+        await engine.cleanup();
+      }
     }
-  }
-};
+  };
+}
+
+// Default instance with no mounts
+export const codeExecutionTool = createCodeExecutionTool();
 
 function getImageForLanguage(language: string): string {
   switch (language) {

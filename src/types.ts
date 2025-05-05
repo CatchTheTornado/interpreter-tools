@@ -48,4 +48,10 @@ export interface SessionConfig {
   strategy: ContainerStrategy;
   poolConfig?: ContainerPoolConfig;
   containerConfig: ContainerConfig;
+}
+
+export interface ContainerMount {
+  type: 'directory';
+  source: string;
+  target: string;
 } 
