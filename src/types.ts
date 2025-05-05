@@ -8,6 +8,9 @@ export interface ExecutionOptions {
   memoryLimit?: string;
   cpuLimit?: string;
   verbose?: boolean;
+  runApp?: {
+    entryFile: string;  // Path to the entry file relative to the mounted directory
+  };
 }
 
 export interface MountOptions {

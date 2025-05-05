@@ -39,8 +39,10 @@ Separate each file with a blank line.`
     const projectDir = path.join('/tmp', uuidv4());
     fs.mkdirSync(projectDir, { recursive: true });
 
+    console.log('** Project Directory:', projectDir); 
+
     // Parse the response and create files
-    const fileRegex = /FILE: (.*?)\n```\n([\s\S]*?)```/g;
+    const fileRegex = /FILE: ([^\n]+)\n```(?:[^\n]*)\n([\s\S]*?)```/g;
     let match;
     const files: { name: string; content: string }[] = [];
 
@@ -50,15 +52,19 @@ Separate each file with a blank line.`
       files.push({ name: fileName, content });
       
       // Write file to temp directory
-      fs.writeFileSync(path.join(projectDir, fileName), content);
+      const filePath = path.join(projectDir, fileName);
+      fs.writeFileSync(filePath, content);
+      console.log(`** Created file: ${fileName}`);
     }
+
+    console.log('** Created files:', files.map(f => f.name).join(', '));
 
     // Execute the project using codeExecutionTool
     const executionResult = await codeExecutionTool.execute({
       language: 'javascript',
       code: 'node server.js',
-      dependencies: ['express'],
-      verbose: true
+      dependencies: ['express']
+      
     });
 
     console.log('Project Execution Result:');
