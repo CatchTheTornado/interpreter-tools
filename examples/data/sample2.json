@@ -1,0 +1,8 @@
+{
+  "name": "Sample 2",
+  "values": [10, 20, 30, 40, 50],
+  "metadata": {
+    "created": "2024-03-20",
+    "type": "test"
+  }
+} 

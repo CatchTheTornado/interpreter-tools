@@ -1,0 +1,24 @@
+{
+  "name": "interpreter-tools",
+  "version": "1.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node examples/basic-usage.ts",
+    "test": "jest"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.10",
+    "dockerode": "^4.0.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.5",
+    "@types/dockerode": "^3.3.23",
+    "@types/node": "^20.11.0",
+    "@types/uuid": "^9.0.7",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}
