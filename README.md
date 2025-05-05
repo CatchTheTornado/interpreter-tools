@@ -15,6 +15,7 @@ A TypeScript library for executing code in isolated Docker containers. This tool
   - Per execution
   - Per session
   - Pooled containers
+- Vercel AI integration for AI-powered code execution
 
 ## Prerequisites
 
@@ -93,66 +94,65 @@ console.log('Average:', average);
 main();
 ```
 
-### Python Example with File Access
+### Using with Vercel AI
+
+The library includes a Vercel AI compatible tool for executing code. Here's how to use it:
 
 ```typescript
-import { ExecutionEngine, ContainerStrategy } from 'interpreter-tools';
-import * as path from 'path';
+import { generateText } from '@vercel/ai';
+import { codeExecutionTool } from './src/ai-tool';
 
 async function main() {
-  const engine = new ExecutionEngine();
-
   try {
-    // Create a session with per-session strategy
-    const sessionId = await engine.createSession({
-      strategy: ContainerStrategy.PER_SESSION,
-      containerConfig: {
-        image: 'python:3.9-slim',
-        mounts: [
-          {
-            type: 'directory',
-            source: path.join(__dirname, 'data'),
-            target: '/app/data'
-          }
-        ],
-        environment: {
-          PYTHONUNBUFFERED: '1'
+    // Use the code execution tool with Vercel AI
+    const result = await generateText({
+      model: 'gpt-4',
+      messages: [
+        {
+          role: 'user',
+          content: 'Write a Python function to calculate the Fibonacci sequence up to n numbers.'
         }
-      }
+      ],
+      tools: [codeExecutionTool],
+      tool_choice: 'auto'
     });
 
-    // Execute Python code that reads from mounted directory
-    const result = await engine.executeCode(sessionId, {
-      language: 'python',
-      code: `import os
-import json
-from pathlib import Path
+    console.log('AI Response:', result);
 
-# Read data from mounted directory
-data_dir = Path('/app/data')
-for file in data_dir.glob('*.json'):
-    with open(file) as f:
-        data = json.load(f)
-        print(f'Processing {file.name}:')
-        print(json.dumps(data, indent=2))`,
+    // You can also use the tool directly
+    const executionResult = await codeExecutionTool.execute({
+      language: 'python',
+      code: `
+def fibonacci(n):
+    a, b = 0, 1
+    sequence = []
+    for _ in range(n):
+        sequence.append(a)
+        a, b = b, a + b
+    return sequence
+
+# Test the function
+result = fibonacci(10)
+print('Fibonacci sequence:', result)
+      `,
       dependencies: []
     });
 
-    console.log('Execution Result:');
-    console.log('STDOUT:', result.stdout);
-    console.log('STDERR:', result.stderr);
-    console.log('Exit Code:', result.exitCode);
-    console.log('Execution Time:', result.executionTime, 'ms');
-
+    console.log('Execution Result:', executionResult);
   } catch (error) {
     console.error('Error:', error);
-  } finally {
-    await engine.cleanup();
   }
 }
 
 main();
 ```
+
+The AI tool supports the following parameters:
+- `code`: The code to execute
+- `language`: The programming language ('javascript', 'typescript', 'python', or 'shell')
+- `dependencies`: Optional list of dependencies to install
+- `strategy`: Container strategy to use ('per_execution', 'pool', or 'per_session')
+- `environment`: Environment variables to set in the container
 
 ## Container Strategies
 
@@ -171,6 +171,8 @@ Maintains a pool of containers that are reused across executions. Ideal for high
 - `dockerode`: ^4.0.0 - Docker API client for Node.js
 - `uuid`: ^9.0.0 - UUID generation
 - `adm-zip`: ^0.5.10 - ZIP file handling
+- `@vercel/ai`: ^3.0.0 - Vercel AI SDK
+- `zod`: ^3.22.4 - Schema validation
 
 ### Development Dependencies
 - `typescript`: ^5.3.3

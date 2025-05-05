@@ -7,6 +7,7 @@ export interface ExecutionOptions {
   timeout?: number;
   memoryLimit?: string;
   cpuLimit?: string;
+  verbose?: boolean;
 }
 
 export interface MountOptions {

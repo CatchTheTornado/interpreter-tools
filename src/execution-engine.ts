@@ -142,23 +142,25 @@ EOL`],
     });
     await writeExec.start({ hijack: true, stdin: false });
 
-    // List workspace contents for debugging
-    const lsExec = await container.exec({
-      Cmd: ['ls', '-la', '/workspace'],
-      AttachStdout: true,
-      AttachStderr: true
-    });
-    const lsStream = await lsExec.start({ hijack: true, stdin: false });
-    await new Promise((resolve) => {
-      let output = '';
-      container.modem.demuxStream(lsStream as Duplex, {
-        write: (chunk: Buffer) => {
-          output += chunk.toString();
-          console.log('Workspace contents:', output);
-        }
-      }, process.stderr);
-      lsStream.on('end', resolve);
-    });
+    // List workspace contents only in verbose mode
+    if (options.verbose) {
+      const lsExec = await container.exec({
+        Cmd: ['ls', '-la', '/workspace'],
+        AttachStdout: true,
+        AttachStderr: true
+      });
+      const lsStream = await lsExec.start({ hijack: true, stdin: false });
+      await new Promise((resolve) => {
+        let output = '';
+        container.modem.demuxStream(lsStream as Duplex, {
+          write: (chunk: Buffer) => {
+            output += chunk.toString();
+            console.log('Workspace contents:', output);
+          }
+        }, process.stderr);
+        lsStream.on('end', resolve);
+      });
+    }
 
     switch (options.language) {
       case 'typescript':
