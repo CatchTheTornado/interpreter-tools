@@ -8,8 +8,8 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true
+    "rootDir": "./src"
   },
-  "include": ["src", "examples"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "examples"]
 } 

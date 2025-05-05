@@ -1,0 +1,75 @@
+import { generateText } from 'ai';
+import { openai } from "@ai-sdk/openai";
+import { codeExecutionTool } from '../src/ai-tool';
+import * as fs from 'fs';
+import * as path from 'path';
+import { v4 as uuidv4 } from 'uuid';
+
+async function main() {
+  try {
+    // First, ask AI to generate a complete Node.js project structure
+    const result = await generateText({
+      model: openai('gpt-4'),
+      maxSteps: 10,
+      messages: [
+        {
+          role: 'user',
+          content: `Create a simple Node.js project with the following structure:
+1. A main server file (server.js) that creates an Express server
+2. A package.json with necessary dependencies
+3. A README.md with setup instructions
+4. A simple route that returns "Hello World"
+
+Please format your response as follows:
+FILE: filename
+\`\`\`
+file contents
+\`\`\`
+
+Separate each file with a blank line.`
+        }
+      ],
+      tools: { codeExecutionTool },
+      toolChoice: 'auto'
+    });
+
+    console.log('AI Response:', result.text);
+
+    // Create a temporary directory for the project
+    const projectDir = path.join('/tmp', uuidv4());
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    // Parse the response and create files
+    const fileRegex = /FILE: (.*?)\n```\n([\s\S]*?)```/g;
+    let match;
+    const files: { name: string; content: string }[] = [];
+
+    while ((match = fileRegex.exec(result.text)) !== null) {
+      const fileName = match[1].trim();
+      const content = match[2].trim();
+      files.push({ name: fileName, content });
+      
+      // Write file to temp directory
+      fs.writeFileSync(path.join(projectDir, fileName), content);
+    }
+
+    // Execute the project using codeExecutionTool
+    const executionResult = await codeExecutionTool.execute({
+      language: 'javascript',
+      code: 'node server.js',
+      dependencies: ['express'],
+      verbose: true
+    });
+
+    console.log('Project Execution Result:');
+    console.log('STDOUT:', executionResult.stdout);
+    console.log('STDERR:', executionResult.stderr);
+    console.log('Exit Code:', executionResult.exitCode);
+    console.log('Execution Time:', executionResult.executionTime, 'ms');
+
+  } catch (error) {
+    console.error('Error:', error);
+  }
+}
+
+main(); 
