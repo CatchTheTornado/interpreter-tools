@@ -6,7 +6,7 @@ async function main() {
   try {
     // Create a session with per-execution strategy
     const sessionId = await engine.createSession({
-      strategy: ContainerStrategy.PER_EXECUTION,
+      strategy: ContainerStrategy.POOL,
       containerConfig: {
         image: 'node:18-alpine',
         environment: {

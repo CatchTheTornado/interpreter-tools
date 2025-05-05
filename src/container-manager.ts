@@ -5,10 +5,16 @@ import * as fs from 'fs';
 import * as path from 'path';
 import AdmZip from 'adm-zip';
 
+interface PooledContainer {
+  container: Docker.Container;
+  inUse: boolean;
+  lastUsed: number;
+}
+
 export class ContainerManager {
   private docker: Docker;
   private containers: Map<string, Docker.Container>;
-  private pool: Docker.Container[];
+  private pool: PooledContainer[];
   private poolConfig: ContainerPoolConfig;
 
   constructor() {
@@ -95,29 +101,62 @@ export class ContainerManager {
   }
 
   async getContainerFromPool(): Promise<Docker.Container | null> {
-    if (this.pool.length > 0) {
-      const container = this.pool.pop() || null;
-      if (container) {
-        try {
-          await container.start();
-          // Clean workspace
-          const exec = await container.exec({
-            Cmd: ['sh', '-c', 'rm -rf /workspace/*'],
-            AttachStdout: true,
-            AttachStderr: true
-          });
-          await exec.start({ hijack: true, stdin: false });
-        } catch (error) {
-          console.error('Error starting pooled container:', error);
-          return null;
-        }
+    // First, try to find an available container that's not in use
+    const availableContainer = this.pool.find(c => !c.inUse);
+    
+    if (availableContainer) {
+      availableContainer.inUse = true;
+      availableContainer.lastUsed = Date.now();
+      
+      try {
+        await availableContainer.container.start();
+        // Clean workspace
+        const exec = await availableContainer.container.exec({
+          Cmd: ['sh', '-c', 'rm -rf /workspace/*'],
+          AttachStdout: true,
+          AttachStderr: true
+        });
+        await exec.start({ hijack: true, stdin: false });
+        return availableContainer.container;
+      } catch (error) {
+        console.error('Error starting pooled container:', error);
+        // Remove failed container from pool
+        this.pool = this.pool.filter(c => c.container !== availableContainer.container);
+        return null;
       }
-      return container;
     }
+
+    // If no available container and pool is not full, create a new one
+    if (this.pool.length < this.poolConfig.maxSize) {
+      try {
+        const container = await this.createContainer({
+          image: 'node:18-alpine', // Default image, will be changed by execution engine
+          mounts: []
+        });
+        
+        this.pool.push({
+          container,
+          inUse: true,
+          lastUsed: Date.now()
+        });
+        
+        return container;
+      } catch (error) {
+        console.error('Error creating new container for pool:', error);
+        return null;
+      }
+    }
+
     return null;
   }
 
   async returnContainerToPool(container: Docker.Container): Promise<void> {
+    const pooledContainer = this.pool.find(c => c.container === container);
+    if (!pooledContainer) {
+      await container.remove({ force: true });
+      return;
+    }
+
     // Clean up the workspace
     try {
       const exec = await container.exec({
@@ -126,13 +165,55 @@ export class ContainerManager {
         AttachStderr: true
       });
       await exec.start({ hijack: true, stdin: false });
+      
+      // Mark container as available
+      pooledContainer.inUse = false;
+      pooledContainer.lastUsed = Date.now();
+      
+      // Check if we need to remove containers due to pool size or idle timeout
+      this.cleanupPool();
     } catch (error) {
       console.error('Error cleaning workspace:', error);
-    }
-    if (this.pool.length < this.poolConfig.maxSize) {
-      this.pool.push(container);
-    } else {
+      // Remove failed container from pool
+      this.pool = this.pool.filter(c => c.container !== container);
       await container.remove({ force: true });
+    }
+  }
+
+  private async cleanupPool(): Promise<void> {
+    const now = Date.now();
+    
+    // Remove containers that exceed idle timeout
+    const containersToRemove = this.pool.filter(c => 
+      !c.inUse && (now - c.lastUsed) > this.poolConfig.idleTimeout
+    );
+    
+    for (const { container } of containersToRemove) {
+      try {
+        await container.remove({ force: true });
+        this.pool = this.pool.filter(c => c.container !== container);
+      } catch (error) {
+        console.error('Error removing idle container:', error);
+      }
+    }
+    
+    // Ensure minimum pool size
+    while (this.pool.length < this.poolConfig.minSize) {
+      try {
+        const container = await this.createContainer({
+          image: 'node:18-alpine', // Default image, will be changed by execution engine
+          mounts: []
+        });
+        
+        this.pool.push({
+          container,
+          inUse: false,
+          lastUsed: now
+        });
+      } catch (error) {
+        console.error('Error creating container for minimum pool size:', error);
+        break;
+      }
     }
   }
 
@@ -146,7 +227,7 @@ export class ContainerManager {
     }
     this.containers.clear();
 
-    for (const container of this.pool) {
+    for (const { container } of this.pool) {
       try {
         await container.remove({ force: true });
       } catch (error) {
