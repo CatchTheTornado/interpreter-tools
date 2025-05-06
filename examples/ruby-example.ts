@@ -30,7 +30,7 @@ async function main() {
     messages: [
       {
         role: 'user',
-        content: 'Write a Ruby script that prints "Hello from Ruby" plus calculating fibonacci, then call the fib(10), take the current time and return it as a nice string. Run the script using the tool provided.'
+        content: 'Write a Ruby script that: prints "Hello from Ruby" plus calculating fibonacci, then call the fib(10), take the current time and return it as a nice string. Run the script using the tool provided. Show the result output as a nice markdown message.'
       }
     ],
     tools: { codeExecutionTool: tool },
