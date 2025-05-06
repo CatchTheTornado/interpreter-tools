@@ -188,6 +188,38 @@ import 'dotenv/config';
 // Rest of the code remains the same
 ```
 
+## Extending with New Languages (Ruby Example)
+
+Interpreter Tools can support any language that has a runnable Docker image—just register a `LanguageConfig` at runtime.
+
+```typescript
+import { LanguageRegistry, LanguageConfig } from 'interpreter-tools';
+
+const rubyConfig: LanguageConfig = {
+  language: 'ruby',
+  defaultImage: 'ruby:3.2-alpine',
+  codeFilename: 'code.rb',
+  prepareFiles: (options, dir) => {
+    const fs = require('fs');
+    const path = require('path');
+    fs.writeFileSync(path.join(dir, 'code.rb'), options.code);
+  },
+  buildInlineCommand: () => ['sh', '-c', 'ruby code.rb'],
+  buildRunAppCommand: (entry) => ['sh', '-c', `ruby ${entry}`]
+};
+
+// Make the engine aware of Ruby
+LanguageRegistry.register(rubyConfig);
+
+// From this point you can use `language: 'ruby'` in `executeCode` or the AI tool.
+```
+
+See [`examples/ruby-example.ts`](./examples/ruby-example.ts) for a full working script that:
+
+- Registers Ruby support on-the-fly
+- Asks the AI model to generate a Ruby script
+- Executes the script inside a `ruby:3.2-alpine` container
+
 ## Local Development
 
 To set up the project for local development:
@@ -281,6 +313,17 @@ A simple example that:
 Run it with:
 ```bash
 yarn ts-node examples/shell-example.ts
+```
+
+### Ruby Example
+[`examples/ruby-example.ts`](./examples/ruby-example.ts)
+Shows how to:
+- Dynamically register Ruby language support
+- Use the AI tool to generate and execute Ruby code
+
+Run it with:
+```bash
+yarn ts-node examples/ruby-example.ts
 ```
 
 ### Benchmark Examples
