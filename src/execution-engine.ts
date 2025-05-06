@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import Docker from 'dockerode';
 import { Duplex } from 'stream';
+import { LanguageRegistry } from './languages';
 
 interface PackageJson {
   name: string;
@@ -34,100 +35,20 @@ export class ExecutionEngine {
     const tempDir = path.join('/tmp', uuidv4());
     fs.mkdirSync(tempDir, { recursive: true });
 
-    let filename: string;
-    let packageFile: string | null = null;
-
-    switch (options.language) {
-      case 'typescript':
-        filename = 'code.ts';
-        packageFile = 'package.json';
-        // Create tsconfig.json
-        fs.writeFileSync(
-          path.join(tempDir, 'tsconfig.json'),
-          JSON.stringify({
-            compilerOptions: {
-              target: 'ES2020',
-              module: 'commonjs',
-              strict: true,
-              esModuleInterop: true,
-              skipLibCheck: true,
-              forceConsistentCasingInFileNames: true,
-              lib: ['ES2020', 'DOM']
-            }
-          }, null, 2)
-        );
-        break;
-      case 'javascript':
-        filename = 'code.js';
-        packageFile = 'package.json';
-        break;
-      case 'python':
-        filename = 'code.py';
-        packageFile = 'requirements.txt';
-        break;
-      case 'shell':
-        filename = 'code.sh';
-        break;
-      default:
-        throw new Error(`Unsupported language: ${options.language}`);
+    const langCfg = LanguageRegistry.get(options.language);
+    if (!langCfg) {
+      throw new Error(`Unsupported language: ${options.language}`);
     }
 
-    const filePath = path.join(tempDir, filename);
-    fs.writeFileSync(filePath, options.code);
-    if (options.language === 'shell') {
-      fs.chmodSync(filePath, '755');
-    }
-
-    if (options.dependencies && options.dependencies.length > 0) {
-      if (packageFile === 'package.json') {
-        const packageJson: PackageJson = {
-          name: 'code-execution',
-          version: '1.0.0',
-          private: true,
-          license: 'UNLICENSED',
-          dependencies: options.dependencies.reduce((acc, dep) => {
-            const [name, version] = dep.split('@');
-            acc[name] = version || 'latest';
-            return acc;
-          }, {} as Record<string, string>),
-          devDependencies: {
-            '@types/node': 'latest',
-            'typescript': 'latest',
-            'ts-node': 'latest'
-          }
-        };
-        if (options.language === 'typescript') {
-          packageJson.devDependencies['@types/lodash'] = 'latest';
-        }
-        fs.writeFileSync(
-          path.join(tempDir, packageFile),
-          JSON.stringify(packageJson, null, 2)
-        );
-      } else if (packageFile === 'requirements.txt') {
-        fs.writeFileSync(
-          path.join(tempDir, packageFile),
-          options.dependencies.join('\n')
-        );
-      }
-    }
-
+    langCfg.prepareFiles(options, tempDir);
     return tempDir;
   }
 
   private getContainerImage(language: string): string {
-    switch (language) {
-      case 'typescript':
-      case 'javascript':
-        return 'node:18-alpine';
-      case 'python':
-        return 'python:3.9-slim';
-      case 'shell':
-        return 'alpine:latest';
-      default:
-        throw new Error(`Unsupported language: ${language}`);
-    }
+    const cfg = LanguageRegistry.get(language);
+    if (!cfg) throw new Error(`Unsupported language: ${language}`);
+    return cfg.defaultImage;
   }
-
 
   private async executeInContainer(
     container: Docker.Container,
@@ -175,23 +96,8 @@ export class ExecutionEngine {
     } else {
       // Write code directly to workspace
       // Determine the correct filename based on language
-      let workspaceFilename: string;
-      switch (options.language) {
-        case 'typescript':
-          workspaceFilename = 'code.ts';
-          break;
-        case 'javascript':
-          workspaceFilename = 'code.js';
-          break;
-        case 'python':
-          workspaceFilename = 'code.py';
-          break;
-        case 'shell':
-          workspaceFilename = 'code.sh';
-          break;
-        default:
-          throw new Error(`Unsupported language: ${options.language}`);
-      }
+      const langCfgInline = LanguageRegistry.get(options.language)!;
+      const workspaceFilename = langCfgInline.codeFilename;
 
       const writeExec = await container.exec({
         Cmd: ['sh', '-c', `cat > /workspace/${workspaceFilename} << 'EOL'
