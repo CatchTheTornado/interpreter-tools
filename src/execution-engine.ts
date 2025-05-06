@@ -128,6 +128,12 @@ export class ExecutionEngine {
     }
   }
 
+  private imageMatches(expected: string, actual: string): boolean {
+    // Simple check: ignore registry prefix and compare repository name and tag
+    const strip = (img: string) => img.replace(/^.*\//, '');
+    return strip(actual) === strip(expected);
+  }
+
   private async executeInContainer(
     container: Docker.Container,
     options: ExecutionOptions,
@@ -451,7 +457,7 @@ EOL`],
             } else {
               // Validate image matches language; otherwise return and create new
               const inspectInfo = await pooledContainer.inspect();
-              if (inspectInfo.Config.Image !== expectedImage) {
+              if (!this.imageMatches(expectedImage, inspectInfo.Config.Image)) {
                 await this.containerManager.returnContainerToPool(pooledContainer);
                 sessionContainer = await this.containerManager.createContainer({
                   ...config.containerConfig,
