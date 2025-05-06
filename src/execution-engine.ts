@@ -5,178 +5,167 @@ import * as fs from 'fs';
 import * as path from 'path';
 import Docker from 'dockerode';
 import { Duplex } from 'stream';
+import { LanguageRegistry } from './languages';
 
-interface PackageJson {
-  name: string;
-  version: string;
-  private: boolean;
-  license: string;
-  dependencies: Record<string, string>;
-  devDependencies: Record<string, string>;
-}
 
 export class ExecutionEngine {
   private containerManager: ContainerManager;
   private sessionContainers: Map<string, Docker.Container>;
   private sessionConfigs: Map<string, SessionConfig>;
+  private containerToSession: Map<string, string>;
+  private depsInstalledContainers: Set<string>;
 
   constructor() {
     this.containerManager = new ContainerManager();
     this.sessionContainers = new Map();
     this.sessionConfigs = new Map();
+    this.containerToSession = new Map();
+    this.depsInstalledContainers = new Set();
   }
 
   private async prepareCodeFile(options: ExecutionOptions): Promise<string> {
     const tempDir = path.join('/tmp', uuidv4());
     fs.mkdirSync(tempDir, { recursive: true });
 
-    let filename: string;
-    let packageFile: string | null = null;
-
-    switch (options.language) {
-      case 'typescript':
-        filename = 'code.ts';
-        packageFile = 'package.json';
-        // Create tsconfig.json
-        fs.writeFileSync(
-          path.join(tempDir, 'tsconfig.json'),
-          JSON.stringify({
-            compilerOptions: {
-              target: 'ES2020',
-              module: 'commonjs',
-              strict: true,
-              esModuleInterop: true,
-              skipLibCheck: true,
-              forceConsistentCasingInFileNames: true,
-              lib: ['ES2020', 'DOM']
-            }
-          }, null, 2)
-        );
-        break;
-      case 'javascript':
-        filename = 'code.js';
-        packageFile = 'package.json';
-        break;
-      case 'python':
-        filename = 'code.py';
-        packageFile = 'requirements.txt';
-        break;
-      case 'shell':
-        filename = 'code.sh';
-        break;
-      default:
-        throw new Error(`Unsupported language: ${options.language}`);
+    const langCfg = LanguageRegistry.get(options.language);
+    if (!langCfg) {
+      throw new Error(`Unsupported language: ${options.language}`);
     }
 
-    const filePath = path.join(tempDir, filename);
-    fs.writeFileSync(filePath, options.code);
-    if (options.language === 'shell') {
-      fs.chmodSync(filePath, '755');
-    }
-
-    if (options.dependencies && options.dependencies.length > 0) {
-      if (packageFile === 'package.json') {
-        const packageJson: PackageJson = {
-          name: 'code-execution',
-          version: '1.0.0',
-          private: true,
-          license: 'UNLICENSED',
-          dependencies: options.dependencies.reduce((acc, dep) => {
-            const [name, version] = dep.split('@');
-            acc[name] = version || 'latest';
-            return acc;
-          }, {} as Record<string, string>),
-          devDependencies: {
-            '@types/node': 'latest',
-            'typescript': 'latest',
-            'ts-node': 'latest'
-          }
-        };
-        if (options.language === 'typescript') {
-          packageJson.devDependencies['@types/lodash'] = 'latest';
-        }
-        fs.writeFileSync(
-          path.join(tempDir, packageFile),
-          JSON.stringify(packageJson, null, 2)
-        );
-      } else if (packageFile === 'requirements.txt') {
-        fs.writeFileSync(
-          path.join(tempDir, packageFile),
-          options.dependencies.join('\n')
-        );
-      }
-    }
-
+    langCfg.prepareFiles(options, tempDir);
     return tempDir;
   }
 
   private getContainerImage(language: string): string {
-    switch (language) {
-      case 'typescript':
-      case 'javascript':
-        return 'node:18-alpine';
-      case 'python':
-        return 'python:3.9-slim';
-      case 'shell':
-        return 'alpine:latest';
-      default:
-        throw new Error(`Unsupported language: ${language}`);
-    }
+    const cfg = LanguageRegistry.get(language);
+    if (!cfg) throw new Error(`Unsupported language: ${language}`);
+    return cfg.defaultImage;
   }
 
   private async executeInContainer(
     container: Docker.Container,
     options: ExecutionOptions,
+    config: SessionConfig,
     codePath: string
   ): Promise<ExecutionResult> {
     const startTime = Date.now();
     let command: string[];
+    let workingDir = '/workspace';
 
-    // Write code directly to workspace
-    const writeExec = await container.exec({
-      Cmd: ['sh', '-c', `cat > /workspace/code.py << 'EOL'
+    // Apply per-execution resource limits if specified
+    if (options.cpuLimit || options.memoryLimit) {
+      const updateCfg: any = {};
+
+      // Parse memory strings like '512m', '1g', or number of bytes
+      const parseMem = (val: string): number => {
+        const lower = val.toLowerCase();
+        if (lower.endsWith('g')) return parseInt(lower) * 1024 * 1024 * 1024;
+        if (lower.endsWith('m')) return parseInt(lower) * 1024 * 1024;
+        if (lower.endsWith('k')) return parseInt(lower) * 1024;
+        return parseInt(lower);
+      };
+
+      if (options.memoryLimit) {
+        updateCfg.Memory = parseMem(options.memoryLimit);
+        updateCfg.MemorySwap = -1; // disable swap limit
+      }
+
+      if (options.cpuLimit) {
+        const cpu = parseFloat(options.cpuLimit);
+        if (!isNaN(cpu) && cpu > 0) {
+          updateCfg.CpuPeriod = 100000;
+          updateCfg.CpuQuota = Math.floor(cpu * 100000); // e.g., 0.5 -> 50000
+        }
+      }
+
+      try {
+        await container.update(updateCfg);
+      } catch (err) {
+        console.warn('Failed to update container resource limits:', err);
+      }
+    }
+
+    // Determine if dependencies are already installed for this container (JS/TS)
+    const depsAlreadyInstalled = this.depsInstalledContainers.has(container.id);
+
+    if (options.runApp) {
+      // Validate that the working directory is mounted
+      const cwdMount = config.containerConfig.mounts?.find(
+        mount => mount.type === 'directory' && mount.target === options.runApp!.cwd
+      );
+
+      if (!cwdMount) {
+        throw new Error(`Working directory ${options.runApp.cwd} is not mounted in the container`);
+      }
+
+      workingDir = options.runApp.cwd;
+
+      // For running entire applications, we don't need to write the code file
+      // as it's already in the mounted directory. Build the command via the LanguageRegistry.
+      const langCfgRunApp = LanguageRegistry.get(options.language);
+      if (!langCfgRunApp) {
+        throw new Error(`Unsupported language: ${options.language}`);
+      }
+
+      command = langCfgRunApp.buildRunAppCommand(options.runApp.entryFile, depsAlreadyInstalled);
+    } else {
+      // Write code directly to workspace
+      // Determine the correct filename based on language
+      const langCfgInline = LanguageRegistry.get(options.language)!;
+      const workspaceFilename = langCfgInline.codeFilename;
+
+      const writeExec = await container.exec({
+        Cmd: ['sh', '-c', `cat > /workspace/${workspaceFilename} << 'EOL'
 ${options.code.trim()}
 EOL`],
-      AttachStdout: true,
-      AttachStderr: true
-    });
-    await writeExec.start({ hijack: true, stdin: false });
-
-    // List workspace contents only in verbose mode
-    if (options.verbose) {
-      const lsExec = await container.exec({
-        Cmd: ['ls', '-la', '/workspace'],
         AttachStdout: true,
         AttachStderr: true
       });
-      const lsStream = await lsExec.start({ hijack: true, stdin: false });
-      await new Promise((resolve) => {
-        let output = '';
-        container.modem.demuxStream(lsStream as Duplex, {
-          write: (chunk: Buffer) => {
-            output += chunk.toString();
-            console.log('Workspace contents:', output);
-          }
-        }, process.stderr);
-        lsStream.on('end', resolve);
-      });
-    }
+      const writeStream = await writeExec.start({ hijack: true, stdin: false });
 
-    switch (options.language) {
-      case 'typescript':
-        command = ['sh', '-c', 'yarn install && npx ts-node code.ts'];
-        break;
-      case 'javascript':
-        command = ['sh', '-c', 'yarn install && node code.js'];
-        break;
-      case 'python':
-        command = ['sh', '-c', 'if [ -f requirements.txt ]; then pip install -r requirements.txt 2>/dev/null; fi && python code.py'];
-        break;
-      case 'shell':
-        command = ['sh', '-c', './code.sh'];
-        break;
-      default:
-        throw new Error(`Unsupported language: ${options.language}`);
+      // Wait for the write operation to complete
+      await new Promise<void>((resolve, reject) => {
+        writeStream.on('end', async () => {
+          try {
+            const info = await writeExec.inspect();
+            if ((info.ExitCode ?? 1) !== 0) {
+              reject(new Error('Failed to write code to workspace'));
+            } else {
+              resolve();
+            }
+          } catch (err) {
+            reject(err);
+          }
+        });
+      });
+
+      // List workspace contents only in verbose mode
+      if (options.verbose) {
+        const lsExec = await container.exec({
+          Cmd: ['ls', '-la', '/workspace'],
+          AttachStdout: true,
+          AttachStderr: true
+        });
+        const lsStream = await lsExec.start({ hijack: true, stdin: false });
+        await new Promise((resolve) => {
+          let output = '';
+          container.modem.demuxStream(lsStream as Duplex, {
+            write: (chunk: Buffer) => {
+              output += chunk.toString();
+              console.log('Workspace contents:', output);
+            }
+          }, process.stderr);
+          lsStream.on('end', resolve);
+        });
+      }
+
+      // If the language defines a dependency installation step, run it first.
+      if (langCfgInline.installDependencies) {
+        await langCfgInline.installDependencies(container, options);
+      }
+
+      // Build command using LanguageRegistry (all languages)
+      command = langCfgInline.buildInlineCommand(depsAlreadyInstalled);
     }
 
     return new Promise((resolve, reject) => {
@@ -184,7 +173,7 @@ EOL`],
         Cmd: command,
         AttachStdout: true,
         AttachStderr: true,
-        WorkingDir: '/workspace'
+        WorkingDir: workingDir
       }, (err, exec) => {
         if (err || !exec) {
           reject(err || new Error('Failed to create exec instance'));
@@ -205,17 +194,29 @@ EOL`],
 
           container.modem.demuxStream(stream as Duplex, {
             write: (chunk: Buffer) => {
-              stdout += chunk.toString();
+              const data = chunk.toString();
+              stdout += data;
+              if (options.streamOutput?.stdout) {
+                options.streamOutput.stdout(data);
+              }
             }
           }, {
             write: (chunk: Buffer) => {
-              stderr += chunk.toString();
+              const data = chunk.toString();
+              stderr += data;
+              if (options.streamOutput?.stderr) {
+                options.streamOutput.stderr(data);
+              }
             }
           });
 
           stream.on('end', async () => {
             try {
               const info = await exec.inspect();
+              // Mark container as having dependencies installed for future runs
+              if (!depsAlreadyInstalled && (options.language === 'javascript' || options.language === 'typescript' || options.language === 'python')) {
+                this.depsInstalledContainers.add(container.id);
+              }
               resolve({
                 stdout,
                 stderr,
@@ -257,7 +258,7 @@ EOL`],
         case ContainerStrategy.PER_EXECUTION:
           container = await this.containerManager.createContainer({
             ...config.containerConfig,
-            image: this.getContainerImage(options.language),
+            image: config.containerConfig.image ? config.containerConfig.image : this.getContainerImage(options.language),
             mounts: [
               ...(config.containerConfig.mounts || []),
               {
@@ -267,26 +268,36 @@ EOL`],
               }
             ]
           });
+          this.containerToSession.set(container.id, sessionId);
           break;
 
         case ContainerStrategy.POOL: {
-          const pooledContainer = await this.containerManager.getContainerFromPool();
-          if (!pooledContainer) {
-            container = await this.containerManager.createContainer({
-              ...config.containerConfig,
-              image: this.getContainerImage(options.language),
-              mounts: [
-                ...(config.containerConfig.mounts || []),
-                {
-                  type: 'directory',
-                  source: codePath,
-                  target: '/workspace'
-                }
-              ]
-            });
-          } else {
-            container = pooledContainer;
+          // Check if a container is already assigned to this session
+          let sessionContainer = this.sessionContainers.get(sessionId);
+          if (!sessionContainer) {
+            const expectedImage = config.containerConfig.image ? config.containerConfig.image : this.getContainerImage(options.language);
+            const pooledContainer = await this.containerManager.getContainerFromPool(expectedImage);
+            if (!pooledContainer) {
+              // No available container, create a fresh one
+              sessionContainer = await this.containerManager.createContainer({
+                ...config.containerConfig,
+                image: expectedImage,
+                mounts: [
+                  ...(config.containerConfig.mounts || []),
+                  {
+                    type: 'directory',
+                    source: codePath,
+                    target: '/workspace'
+                  }
+                ]
+              });
+            } else {
+              sessionContainer = pooledContainer;
+            }
+            this.sessionContainers.set(sessionId, sessionContainer);
+            this.containerToSession.set(sessionContainer.id, sessionId);
           }
+          container = sessionContainer;
           break;
         }
 
@@ -303,12 +314,13 @@ EOL`],
           throw new Error(`Unsupported container strategy: ${config.strategy}`);
       }
 
-      const result = await this.executeInContainer(container, options, codePath);
+      const result = await this.executeInContainer(container, options, config, codePath);
 
       if (config.strategy === ContainerStrategy.POOL) {
-        await this.containerManager.returnContainerToPool(container);
+        // Do nothing here; container remains assigned for session lifetime.
       } else if (config.strategy === ContainerStrategy.PER_EXECUTION) {
         await container.remove({ force: true });
+        this.containerToSession.delete(container.id);
       }
 
       return result;
@@ -320,9 +332,17 @@ EOL`],
 
   async cleanupSession(sessionId: string): Promise<void> {
     const container = this.sessionContainers.get(sessionId);
+    const config = this.sessionConfigs.get(sessionId);
+
     if (container) {
-      await container.remove({ force: true });
+      if (config?.strategy === ContainerStrategy.POOL) {
+        // Return container to pool after cleaning up workspace via ContainerManager
+        await this.containerManager.returnContainerToPool(container);
+      } else {
+        await container.remove({ force: true });
+      }
       this.sessionContainers.delete(sessionId);
+      this.containerToSession.delete(container.id);
     }
     this.sessionConfigs.delete(sessionId);
   }
@@ -331,5 +351,6 @@ EOL`],
     await this.containerManager.cleanup();
     this.sessionContainers.clear();
     this.sessionConfigs.clear();
+    this.containerToSession.clear();
   }
 } 

@@ -1,52 +1,118 @@
 # Interpreter Tools
 
-A TypeScript library for executing code in isolated Docker containers. This tool provides a secure and isolated environment for running code in various programming languages, with support for dependencies and file system access.
+<img src=".readme-assets/hero.png" />
 
-## Features
+Run AI-generated code on your own machine—**locally, securely, at lightning speed**.  
 
-- Execute code in isolated Docker containers
-- Support for multiple languages:
-  - JavaScript/TypeScript
-  - Python
-  - Shell scripts
-- Dependency management
-- File system access through mounts
-- Multiple container strategies:
-  - Per execution
-  - Per session
-  - Pooled containers
-- Vercel AI integration for AI-powered code execution
+**Vercel AI tool** provided out of the box.
 
-## Prerequisites
+Interpreter Tools is a drop-in **"code-interpreter"** backend for AI agents: it spins up **lightweight Docker containers**, executes untrusted snippets in < 100 ms (with pooling), streams the output, and can be **extended to any language** by registering a new config object.
 
-- Node.js 18 or later
-- Docker
-- Yarn package manager
+Supports pooling, per-session containers, dependency caching, and real-time stdout/stderr—perfect for chat-based tools like GPT function calling, Jupyter-style notebooks, or autonomous agents that need to evaluate code on the fly.
 
-## Installation
+## Why Interpreter Tools?
 
-1. Clone the repository:
+⚡ **Sub-100 ms average execution** (with container pool & dep-cache). Run untrusted code fast without leaving Node!
+
+🔌 **Plug-in language architecture** – add a new language by registering one object (see `LanguageRegistry`). No engine edits required.
+
+📦 **Zero-install repeat runs** – dependencies are installed once per container and skipped thereafter, saving seconds on every call.
+
+🔒 **Docker-level isolation** – each snippet executes in its own constrained container (CPU, memory, no-new-privileges).
+
+🖥️ **Real-time streaming** – stdout/stderr stream back instantly; ideal for REPL-like experiences.
+
+---
+
+## Getting Started
+
+### Installation
+
+Install the package and its dependencies in your Node.js project:
+
 ```bash
-git clone https://github.com/CatchTheTornado/interpreter-tools.git
-cd interpreter-tools
+# Using yarn
+yarn add interpreter-tools ai @ai-sdk/openai
+
+# Or using npm
+npm install interpreter-tools ai @ai-sdk/openai
 ```
 
-2. Install dependencies:
-```bash
-yarn install
+### Quick Start
+
+1. Create a new file `example.js` in your project:
+
+```javascript
+const { generateText } = require('ai');
+const { openai } = require('@ai-sdk/openai');
+const { createCodeExecutionTool } = require('interpreter-tools');
+
+async function main() {
+  try {
+    // Create a code execution tool instance
+    const codeExecutionTool = createCodeExecutionTool();
+
+    // Use generateText with codeExecutionTool to generate and execute code
+    const result = await generateText({
+      model: openai('gpt-4'),
+      maxSteps: 10,
+      messages: [
+        {
+          role: 'user',
+          content: 'Write a JavaScript function that calculates the sum of numbers from 1 to n and print the result for n=10. Make sure to include a test case.'
+        }
+      ],
+      tools: { codeExecutionTool },
+      toolChoice: 'auto'
+    });
+
+    console.log('AI Response:', result.text);
+    console.log('Execution Results:', result.toolResults);
+
+  } catch (error) {
+    console.error('Error:', error);
+  }
+}
+
+main();
 ```
 
-3. Build the project:
+2. Set up your OpenAI API key:
+
 ```bash
-yarn build
+# Using yarn
+yarn add dotenv
+
+# Or using npm
+npm install dotenv
 ```
 
-## Usage
+Create a `.env` file in your project root:
+```env
+OPENAI_API_KEY=your_api_key_here
+```
 
-### Basic JavaScript Example
+3. Update your code to use the environment variable:
 
-```typescript
-import { ExecutionEngine, ContainerStrategy } from 'interpreter-tools';
+```javascript
+require('dotenv').config();
+// ... rest of the code remains the same
+```
+
+4. Run the example:
+
+```bash
+node example.js
+```
+
+### Direct ExecutionEngine Usage
+
+If you prefer to use the ExecutionEngine directly without the AI integration, here's how to do it:
+
+1. Create a new file `direct-example.js`:
+
+```javascript
+const { ExecutionEngine, ContainerStrategy } = require('interpreter-tools');
 
 async function main() {
   const engine = new ExecutionEngine();
@@ -75,7 +141,10 @@ console.log('Numbers:', numbers);
 console.log('Sum:', sum);
 console.log('Average:', average);
       `,
-      dependencies: []
+      streamOutput: {
+        stdout: (data) => console.log('Container output:', data),
+        stderr: (data) => console.error('Container error:', data)
+      }
     });
 
     console.log('Execution Result:');
@@ -87,6 +156,7 @@ console.log('Average:', average);
   } catch (error) {
     console.error('Error:', error);
   } finally {
+    // Clean up resources
     await engine.cleanup();
   }
 }
@@ -94,109 +164,362 @@ console.log('Average:', average);
 main();
 ```
 
-### Using with Vercel AI
+2. Run the example:
 
-The library includes a Vercel AI compatible tool for executing code. Here's how to use it:
-
-```typescript
-import { generateText } from '@vercel/ai';
-import { codeExecutionTool } from './src/ai-tool';
-
-async function main() {
-  try {
-    // Use the code execution tool with Vercel AI
-    const result = await generateText({
-      model: 'gpt-4',
-      messages: [
-        {
-          role: 'user',
-          content: 'Write a Python function to calculate the Fibonacci sequence up to n numbers.'
-        }
-      ],
-      tools: [codeExecutionTool],
-      tool_choice: 'auto'
-    });
-
-    console.log('AI Response:', result);
-
-    // You can also use the tool directly
-    const executionResult = await codeExecutionTool.execute({
-      language: 'python',
-      code: `
-def fibonacci(n):
-    a, b = 0, 1
-    sequence = []
-    for _ in range(n):
-        sequence.append(a)
-        a, b = b, a + b
-    return sequence
-
-# Test the function
-result = fibonacci(10)
-print('Fibonacci sequence:', result)
-      `,
-      dependencies: []
-    });
-
-    console.log('Execution Result:', executionResult);
-  } catch (error) {
-    console.error('Error:', error);
-  }
-}
-
-main();
+```bash
+node direct-example.js
 ```
 
-The AI tool supports the following parameters:
-- `code`: The code to execute
-- `language`: The programming language ('javascript', 'typescript', 'python', or 'shell')
-- `dependencies`: Optional list of dependencies to install
-- `strategy`: Container strategy to use ('per_execution', 'pool', or 'per_session')
-- `environment`: Environment variables to set in the container
+This example demonstrates:
+- Creating a session with a specific container strategy
+- Configuring the container environment
+- Executing code directly in the container
+- Handling real-time output streaming
+- Proper resource cleanup
 
-## Container Strategies
+### TypeScript Support
 
-### PER_EXECUTION
-Creates a new container for each code execution. Best for one-off executions or when you need complete isolation.
+If you're using TypeScript, you can import the packages with type definitions:
 
-### PER_SESSION
-Reuses the same container for all executions within a session. Good for running multiple related code snippets.
+```typescript
+import { generateText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+import { createCodeExecutionTool } from 'interpreter-tools';
+import 'dotenv/config';
 
-### POOL
-Maintains a pool of containers that are reused across executions. Ideal for high-throughput scenarios.
+// Rest of the code remains the same
+```
 
-## Dependencies
+## Extending with New Languages (Ruby Example)
 
-### Runtime Dependencies
-- `dockerode`: ^4.0.0 - Docker API client for Node.js
-- `uuid`: ^9.0.0 - UUID generation
-- `adm-zip`: ^0.5.10 - ZIP file handling
-- `@vercel/ai`: ^3.0.0 - Vercel AI SDK
-- `zod`: ^3.22.4 - Schema validation
+Interpreter Tools can support any language that has a runnable Docker image—just register a `LanguageConfig` at runtime.
 
-### Development Dependencies
-- `typescript`: ^5.3.3
-- `ts-node`: ^10.9.2
-- `@types/node`: ^20.11.0
-- `@types/dockerode`: ^3.3.23
-- `@types/uuid`: ^9.0.7
-- `@types/adm-zip`: ^0.5.5
+```typescript
+import { LanguageRegistry, LanguageConfig } from 'interpreter-tools';
 
-## Security Considerations
+const rubyConfig: LanguageConfig = {
+  language: 'ruby',
+  defaultImage: 'ruby:3.2-alpine',
+  codeFilename: 'code.rb',
+  prepareFiles: (options, dir) => {
+    const fs = require('fs');
+    const path = require('path');
+    fs.writeFileSync(path.join(dir, 'code.rb'), options.code);
+  },
+  buildInlineCommand: () => ['sh', '-c', 'ruby code.rb'],
+  buildRunAppCommand: (entry) => ['sh', '-c', `ruby ${entry}`]
+};
 
-- Containers run with limited privileges
-- Network access is restricted by default
-- Resource limits are enforced (CPU, memory)
-- File system access is controlled through mounts
+// Make the engine aware of Ruby
+LanguageRegistry.register(rubyConfig);
 
-## Contributing
+// From this point you can use `language: 'ruby'` in `executeCode` or the AI tool.
+```
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+See [`examples/ruby-example.ts`](./examples/ruby-example.ts) for a full working script that:
+
+- Registers Ruby support on-the-fly
+- Asks the AI model to generate a Ruby script
+- Executes the script inside a `ruby:3.2-alpine` container
+
+## Local Development
+
+To set up the project for local development:
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/interpreter-tools.git
+cd interpreter-tools
+
+# Install dependencies
+yarn install
+```
+
+## Examples
+
+The `/examples` directory contains several example scripts demonstrating different use cases of the interpreter tools:
+
+### AI Tool Example
+[`examples/ai-example.ts`](./examples/ai-example.ts)
+Demonstrates how to:
+- Use the code execution tool with Vercel AI
+- Generate and execute Python code using AI
+- Handle AI-generated code execution results
+- Process Fibonacci sequence calculation
+
+Run it with:
+```bash
+yarn ts-node examples/ai-example.ts
+```
+
+### Basic Usage Example
+[`examples/basic-usage.ts`](./examples/basic-usage.ts)
+Shows how to:
+- Set up a basic execution environment
+- Execute JavaScript code in a container
+- Handle execution results and errors
+- Use the per-execution container strategy
+
+Run it with:
+```bash
+yarn ts-node examples/basic-usage.ts
+```
+
+### Python Example
+[`examples/python-example.ts`](./examples/python-example.ts)
+Demonstrates how to:
+- Execute Python code in a container
+- Handle Python dependencies
+- Process Python script output
+- Use Python-specific container configuration
+
+Run it with:
+```bash
+yarn ts-node examples/python-example.ts
+```
+
+### Shell JSON Processing Example
+[`examples/shell-json-example.ts`](./examples/shell-json-example.ts)
+Demonstrates how to:
+- Generate and execute a shell script using AI
+- Create directories and JSON files
+- Process JSON files using `jq`
+- Handle Alpine Linux package dependencies
+
+Run it with:
+```bash
+yarn ts-node examples/shell-json-example.ts
+```
+
+### Node.js Project Example
+[`examples/nodejs-project-example.ts`](./examples/nodejs-project-example.ts)
+Shows how to:
+- Generate a complete Node.js project structure using AI
+- Create an Express server
+- Handle project dependencies
+- Execute the generated project in a container
+
+Run it with:
+```bash
+yarn ts-node examples/nodejs-project-example.ts
+```
+
+### Shell Example
+[`examples/shell-example.ts`](./examples/shell-example.ts)
+A simple example that:
+- Creates a shell script
+- Executes it in an Alpine Linux container
+- Demonstrates basic container configuration
+- Shows real-time output streaming
+
+Run it with:
+```bash
+yarn ts-node examples/shell-example.ts
+```
+
+### Ruby Example
+[`examples/ruby-example.ts`](./examples/ruby-example.ts)
+Shows how to:
+- Dynamically register Ruby language support
+- Use the AI tool to generate and execute Ruby code
+
+Run it with:
+```bash
+yarn ts-node examples/ruby-example.ts
+```
+
+### Benchmark Examples
+[`examples/benchmark-pool.ts`](./examples/benchmark-pool.ts) – JavaScript/TypeScript pool benchmark (20 rounds)
+
+```bash
+yarn ts-node examples/benchmark-pool.ts
+```
+
+[`examples/benchmark-pool-python.ts`](./examples/benchmark-pool-python.ts) – Python pool benchmark
+
+```bash
+yarn ts-node examples/benchmark-pool-python.ts
+```
+
+Average times on a MacBook M2 Pro: **JS 40 ms / round**, **Python 60 ms / round** after first run (deps cached).
+
+## Usage
+
+The main components of this project are:
+
+1. `ExecutionEngine`: Manages code execution in containers
+2. `ContainerManager`: Handles Docker container lifecycle
+3. `CodeExecutionTool`: Provides a high-level interface for executing code
+
+### Basic Usage
+
+```typescript
+import { createCodeExecutionTool } from 'interpreter-tools';
+
+const codeExecutionTool = createCodeExecutionTool();
+
+const result = await codeExecutionTool.execute({
+  language: 'javascript',
+  code: 'console.log("Hello, World!");',
+  streamOutput: {
+    stdout: (data) => console.log(data),
+    stderr: (data) => console.error(data)
+  }
+});
+```
+
+## Documentation
+
+### Architecture Overview
+
+Interpreter Tools is composed of three core layers:
+
+| Layer | Responsibility |
+|-------|---------------|
+| **ExecutionEngine** | High-level façade that orchestrates container lifecycle, dependency caching, and code execution. |
+| **ContainerManager** | Low-level wrapper around Dockerode that creates, starts, pools, and cleans containers. |
+| **LanguageRegistry** | Pluggable store of `LanguageConfig` objects that describe how to build/run code for each language. |
+
+All user-facing helpers (e.g. the `codeExecutionTool` for AI agents) are thin wrappers that forward to `ExecutionEngine`.
+
+```mermaid
+graph TD;
+  subgraph Runtime
+    A[ExecutionEngine]
+    B[ContainerManager]
+    C[Docker]
+  end
+  D[LanguageRegistry]
+  A --> B --> C
+  A --> D
+```
+
+---
+
+### Public API
+
+#### `ExecutionEngine`
+
+```typescript
+new ExecutionEngine()
+
+createSession(config: SessionConfig): Promise<string>
+executeCode(sessionId: string, options: ExecutionOptions): Promise<ExecutionResult>
+cleanupSession(sessionId: string): Promise<void>
+cleanup(): Promise<void>
+```
+
+* **SessionConfig** – chooses a `ContainerStrategy` (`PER_EXECUTION`, `POOL`, `PER_SESSION`) and passes a `containerConfig` (image, env, mounts, limits).
+* **ExecutionOptions** – language, code snippet, optional dependencies, stream handlers, etc.
+* **ExecutionResult** – `{ stdout, stderr, exitCode, executionTime }`.
+
+#### `createCodeExecutionTool()`
+
+Factory that exposes the engine as an [OpenAI function-calling](https://platform.openai.com/docs/guides/function-calling)-friendly tool. It validates parameters with _Zod_ and returns the same `ExecutionResult`.
+
+```typescript
+import { createCodeExecutionTool } from 'interpreter-tools';
+
+const tool = createCodeExecutionTool();
+const { stdout } = await tool.execute({
+  language: 'python',
+  code: 'print("Hello")'
+});
+```
+
+#### `LanguageRegistry`
+
+```typescript
+LanguageRegistry.get(name): LanguageConfig | undefined
+LanguageRegistry.register(config: LanguageConfig): void
+LanguageRegistry.names(): string[]
+```
+
+`LanguageConfig` fields:
+
+```typescript
+interface LanguageConfig {
+  language: string;                    // identifier
+  defaultImage: string;                // docker image
+  codeFilename: string;                // filename inside /workspace for inline code
+  prepareFiles(options, dir): void;    // write code + metadata into temp dir
+  buildInlineCommand(depsInstalled): string[];
+  buildRunAppCommand(entry, depsInstalled): string[];
+  installDependencies?(container, options): Promise<void>; // optional pre-exec hook
+}
+```
+
+---
+
+### Adding a New Language
+
+1. Create a `LanguageConfig` object (see the [Ruby example](#extending-with-new-languages-ruby-example)).
+2. Call `LanguageRegistry.register(config)` **once** at startup.
+3. Provide a suitable Docker image that has the runtime installed.
+
+No changes to `ExecutionEngine` are required.
+
+---
+
+### Container Strategies
+
+| Strategy | Description | When to use |
+|----------|-------------|-------------|
+| **PER_EXECUTION** | New container per snippet; removed immediately. | Maximum isolation; slowest. |
+| **POOL** | Containers are pooled per session and reused—workspace is wiped between runs. | Best latency / resource trade-off for chat bots. |
+| **PER_SESSION** | One dedicated container for the whole session; not pooled. | Long-running interactive notebooks. |
+
+---
+
+### Mounts & Environment Variables
+
+`containerConfig` accepts:
+
+```typescript
+{
+  image?: string;            // overrides language default
+  mounts?: ContainerMount[]; // { type: 'directory' | 'tmpfs', source, target }
+  environment?: Record<string, string>;
+  cpuLimit?: string;         // e.g. '0.5'
+  memoryLimit?: string;      // e.g. '512m'
+}
+```
+
+### Per-Execution Resource Limits
+
+`ExecutionOptions` let you override CPU and memory **for a single run**:
+
+```typescript
+await engine.executeCode(id, {
+  language: 'python',
+  code: 'print(\"hi\")',
+  cpuLimit: '0.5',       // half a CPU core
+  memoryLimit: '256m'    // 256 MB RAM
+});
+```
+
+Under the hood the engine calls `container.update({ CpuPeriod, CpuQuota, Memory })` just before execution, so the limits apply even when pooling.
+
+---
+
+### Streaming Output
+
+Pass `streamOutput: { stdout?, stderr? }` in `ExecutionOptions` to receive data chunks in real time while the process runs.
+
+```typescript
+await engine.executeCode(id, {
+  language: 'shell',
+  code: 'for i in 1 2 3; do echo $i; sleep 1; done',
+  streamOutput: {
+    stdout: (d) => process.stdout.write(d)
+  }
+});
+```
+
+---
+
+Happy hacking! 
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+MIT 

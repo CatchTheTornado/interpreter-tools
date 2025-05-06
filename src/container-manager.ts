@@ -76,6 +76,29 @@ export class ContainerManager {
   }
 
   async createContainer(config: ContainerConfig): Promise<Docker.Container> {
+    // Pull the image if it doesn't exist
+    try {
+      await new Promise<void>((resolve, reject) => {
+        this.docker.pull(config.image, (err: Error | null, stream: NodeJS.ReadableStream) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+
+          this.docker.modem.followProgress(stream, (err: Error | null) => {
+            if (err) {
+              reject(err);
+              return;
+            }
+            resolve();
+          });
+        });
+      });
+    } catch (error) {
+      console.error(`Error pulling image ${config.image}:`, error);
+      throw error;
+    }
+
     const container = await this.docker.createContainer({
       Image: config.image,
       Tty: true,
@@ -100,24 +123,77 @@ export class ContainerManager {
     return container;
   }
 
-  async getContainerFromPool(): Promise<Docker.Container | null> {
+
+  private imageMatches(expected: string, actual: string): boolean {
+    // Simple check: ignore registry prefix and compare repository name and tag
+    const strip = (img: string) => img.replace(/^.*\//, '');
+    return strip(actual) === strip(expected);
+  }
+  
+  async getContainerFromPool(expectedImage?: string): Promise<Docker.Container | null> {
     // First, try to find an available container that's not in use
-    const availableContainer = this.pool.find(c => !c.inUse);
-    
+    let availableContainer: PooledContainer | undefined;
+
+    if (expectedImage) {
+      // Find container that matches expected image
+      for (const c of this.pool) {
+        if (c.inUse) continue;
+        try {
+          const inspectInfo = await c.container.inspect();
+          if (this.imageMatches(expectedImage, inspectInfo.Config.Image)) {
+            availableContainer = c;
+            break;
+          }
+        } catch (err) {
+          console.error('Error inspecting pooled container:', err);
+        }
+      }
+    } else {
+      availableContainer = this.pool.find(c => !c.inUse);
+    }
     if (availableContainer) {
       availableContainer.inUse = true;
       availableContainer.lastUsed = Date.now();
       
       try {
-        await availableContainer.container.start();
+        // Start the container only if it is not already running
+        const inspectInfo = await availableContainer.container.inspect();
+        if (!inspectInfo.State.Running) {
+          await availableContainer.container.start();
+        }
         // Clean workspace
         const exec = await availableContainer.container.exec({
           Cmd: ['sh', '-c', 'rm -rf /workspace/*'],
           AttachStdout: true,
           AttachStderr: true
         });
-        await exec.start({ hijack: true, stdin: false });
-        return availableContainer.container;
+        const stream = await exec.start({ hijack: true, stdin: false });
+
+        // Wait for cleanup to complete before reusing container
+        const cleanupSucceeded: boolean = await new Promise<boolean>((resolve) => {
+          stream.on('end', async () => {
+            try {
+              const info = await exec.inspect();
+              resolve((info.ExitCode ?? 1) === 0);
+            } catch {
+              resolve(false);
+            }
+          });
+        });
+
+        if (cleanupSucceeded) {
+          return availableContainer.container;
+        } else {
+          console.warn('Workspace cleanup failed, removing container from pool');
+          // Remove failed container
+          try {
+            await availableContainer.container.remove({ force: true });
+          } catch (err) {
+            console.error('Error removing failed container:', err);
+          }
+          this.pool = this.pool.filter(c => c.container !== availableContainer.container);
+          return null;
+        }
       } catch (error) {
         console.error('Error starting pooled container:', error);
         // Remove failed container from pool
@@ -130,7 +206,7 @@ export class ContainerManager {
     if (this.pool.length < this.poolConfig.maxSize) {
       try {
         const container = await this.createContainer({
-          image: 'node:18-alpine', // Default image, will be changed by execution engine
+          image: expectedImage ?? 'node:18-alpine', // Default image, will be changed by execution engine
           mounts: []
         });
         
@@ -164,13 +240,36 @@ export class ContainerManager {
         AttachStdout: true,
         AttachStderr: true
       });
-      await exec.start({ hijack: true, stdin: false });
-      
-      // Mark container as available
-      pooledContainer.inUse = false;
-      pooledContainer.lastUsed = Date.now();
-      
-      // Check if we need to remove containers due to pool size or idle timeout
+      const stream = await exec.start({ hijack: true, stdin: false });
+
+      // Wait for cleanup to finish
+      const cleanupOk: boolean = await new Promise<boolean>((resolve) => {
+        stream.on('end', async () => {
+          try {
+            const info = await exec.inspect();
+            resolve((info.ExitCode ?? 1) === 0);
+          } catch {
+            resolve(false);
+          }
+        });
+      });
+
+      if (cleanupOk) {
+        // Mark container as available
+        pooledContainer.inUse = false;
+        pooledContainer.lastUsed = Date.now();
+      } else {
+        console.warn('Workspace cleanup failed in returnContainerToPool, removing container');
+        try {
+          await container.remove({ force: true });
+        } catch (err) {
+          console.error('Failed removing container after cleanup failure:', err);
+        }
+        this.pool = this.pool.filter(c => c.container !== container);
+        return; // exit early
+      }
+
+      // Check pool maintenance
       this.cleanupPool();
     } catch (error) {
       console.error('Error cleaning workspace:', error);

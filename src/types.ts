@@ -9,7 +9,12 @@ export interface ExecutionOptions {
   cpuLimit?: string;
   verbose?: boolean;
   runApp?: {
+    cwd: string;
     entryFile: string;  // Path to the entry file relative to the mounted directory
+  };
+  streamOutput?: {
+    stdout?: (data: string) => void;
+    stderr?: (data: string) => void;
   };
 }
 
@@ -48,4 +53,10 @@ export interface SessionConfig {
   strategy: ContainerStrategy;
   poolConfig?: ContainerPoolConfig;
   containerConfig: ContainerConfig;
+}
+
+export interface ContainerMount {
+  type: 'directory';
+  source: string;
+  target: string;
 } 
