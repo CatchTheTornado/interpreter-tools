@@ -146,22 +146,30 @@ export class ContainerManager {
         const stream = await exec.start({ hijack: true, stdin: false });
 
         // Wait for cleanup to complete before reusing container
-        await new Promise<void>((resolve, reject) => {
+        const cleanupSucceeded: boolean = await new Promise<boolean>((resolve) => {
           stream.on('end', async () => {
             try {
               const info = await exec.inspect();
-              if ((info.ExitCode ?? 1) !== 0) {
-                reject(new Error('Failed to clean workspace in pooled container'));
-              } else {
-                resolve();
-              }
-            } catch (err) {
-              reject(err);
+              resolve((info.ExitCode ?? 1) === 0);
+            } catch {
+              resolve(false);
             }
           });
         });
 
-        return availableContainer.container;
+        if (cleanupSucceeded) {
+          return availableContainer.container;
+        } else {
+          console.warn('Workspace cleanup failed, removing container from pool');
+          // Remove failed container
+          try {
+            await availableContainer.container.remove({ force: true });
+          } catch (err) {
+            console.error('Error removing failed container:', err);
+          }
+          this.pool = this.pool.filter(c => c.container !== availableContainer.container);
+          return null;
+        }
       } catch (error) {
         console.error('Error starting pooled container:', error);
         // Remove failed container from pool
@@ -208,13 +216,36 @@ export class ContainerManager {
         AttachStdout: true,
         AttachStderr: true
       });
-      await exec.start({ hijack: true, stdin: false });
-      
-      // Mark container as available
-      pooledContainer.inUse = false;
-      pooledContainer.lastUsed = Date.now();
-      
-      // Check if we need to remove containers due to pool size or idle timeout
+      const stream = await exec.start({ hijack: true, stdin: false });
+
+      // Wait for cleanup to finish
+      const cleanupOk: boolean = await new Promise<boolean>((resolve) => {
+        stream.on('end', async () => {
+          try {
+            const info = await exec.inspect();
+            resolve((info.ExitCode ?? 1) === 0);
+          } catch {
+            resolve(false);
+          }
+        });
+      });
+
+      if (cleanupOk) {
+        // Mark container as available
+        pooledContainer.inUse = false;
+        pooledContainer.lastUsed = Date.now();
+      } else {
+        console.warn('Workspace cleanup failed in returnContainerToPool, removing container');
+        try {
+          await container.remove({ force: true });
+        } catch (err) {
+          console.error('Failed removing container after cleanup failure:', err);
+        }
+        this.pool = this.pool.filter(c => c.container !== container);
+        return; // exit early
+      }
+
+      // Check pool maintenance
       this.cleanupPool();
     } catch (error) {
       console.error('Error cleaning workspace:', error);
