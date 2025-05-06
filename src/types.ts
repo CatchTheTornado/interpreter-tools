@@ -9,6 +9,7 @@ export interface ExecutionOptions {
   cpuLimit?: string;
   verbose?: boolean;
   runApp?: {
+    cwd: string;
     entryFile: string;  // Path to the entry file relative to the mounted directory
   };
 }

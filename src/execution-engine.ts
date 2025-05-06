@@ -127,12 +127,29 @@ export class ExecutionEngine {
   private async executeInContainer(
     container: Docker.Container,
     options: ExecutionOptions,
+    config: SessionConfig,
     codePath: string
   ): Promise<ExecutionResult> {
     const startTime = Date.now();
     let command: string[];
+    let workingDir = '/workspace';
 
     if (options.runApp) {
+      // Validate that the working directory is mounted
+      if (!config) {
+        throw new Error('Container configuration not found');
+      }
+
+      const cwdMount = config.containerConfig.mounts?.find(
+        mount => mount.type === 'directory' && mount.target === options.runApp!.cwd
+      );
+
+      if (!cwdMount) {
+        throw new Error(`Working directory ${options.runApp.cwd} is not mounted in the container`);
+      }
+
+      workingDir = options.runApp.cwd;
+
       // For running entire applications, we don't need to write the code file
       // as it's already in the mounted directory
       switch (options.language) {
@@ -205,7 +222,7 @@ EOL`],
         Cmd: command,
         AttachStdout: true,
         AttachStderr: true,
-        WorkingDir: '/workspace'
+        WorkingDir: workingDir
       }, (err, exec) => {
         if (err || !exec) {
           reject(err || new Error('Failed to create exec instance'));
@@ -324,7 +341,7 @@ EOL`],
           throw new Error(`Unsupported container strategy: ${config.strategy}`);
       }
 
-      const result = await this.executeInContainer(container, options, codePath);
+      const result = await this.executeInContainer(container, options, config, codePath);
 
       if (config.strategy === ContainerStrategy.POOL) {
         await this.containerManager.returnContainerToPool(container);

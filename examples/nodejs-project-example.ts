@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 async function main() {
   try {
     // First, ask AI to generate a complete Node.js project structure
+    console.log('Generating project structure...');
     const result = await generateText({
       model: openai('gpt-4'),
       maxSteps: 10,
@@ -19,6 +20,7 @@ async function main() {
 2. A package.json with necessary dependencies
 3. A README.md with setup instructions
 4. A simple route that returns "Hello World"
+5. Include a console log message "Listening on port 3000"
 
 Please format your response as follows:
 FILE: filename
@@ -73,7 +75,8 @@ Separate each file with a blank line.`
       language: 'javascript',
       code: '',
       runApp: {
-        entryFile: 'project/server.js'
+        entryFile: 'server.js',
+        cwd: '/project'
       },
       dependencies: ['express']
     });
