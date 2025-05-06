@@ -76,6 +76,29 @@ export class ContainerManager {
   }
 
   async createContainer(config: ContainerConfig): Promise<Docker.Container> {
+    // Pull the image if it doesn't exist
+    try {
+      await new Promise<void>((resolve, reject) => {
+        this.docker.pull(config.image, (err: Error | null, stream: NodeJS.ReadableStream) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+
+          this.docker.modem.followProgress(stream, (err: Error | null) => {
+            if (err) {
+              reject(err);
+              return;
+            }
+            resolve();
+          });
+        });
+      });
+    } catch (error) {
+      console.error(`Error pulling image ${config.image}:`, error);
+      throw error;
+    }
+
     const container = await this.docker.createContainer({
       Image: config.image,
       Tty: true,

@@ -19,11 +19,13 @@ export class ExecutionEngine {
   private containerManager: ContainerManager;
   private sessionContainers: Map<string, Docker.Container>;
   private sessionConfigs: Map<string, SessionConfig>;
+  private containerToSession: Map<string, string>;
 
   constructor() {
     this.containerManager = new ContainerManager();
     this.sessionContainers = new Map();
     this.sessionConfigs = new Map();
+    this.containerToSession = new Map();
   }
 
   private async prepareCodeFile(options: ExecutionOptions): Promise<string> {
@@ -136,10 +138,6 @@ export class ExecutionEngine {
 
     if (options.runApp) {
       // Validate that the working directory is mounted
-      if (!config) {
-        throw new Error('Container configuration not found');
-      }
-
       const cwdMount = config.containerConfig.mounts?.find(
         mount => mount.type === 'directory' && mount.target === options.runApp!.cwd
       );
@@ -210,6 +208,33 @@ EOL`],
           command = ['sh', '-c', 'if [ -f requirements.txt ]; then pip install -r requirements.txt 2>/dev/null; fi && python code.py'];
           break;
         case 'shell':
+          // For shell scripts, install Alpine packages if dependencies are specified
+          if (options.dependencies && options.dependencies.length > 0) {
+            // First update the package repository
+            const updateExec = await container.exec({
+              Cmd: ['sh', '-c', 'apk update'],
+              AttachStdout: true,
+              AttachStderr: true
+            });
+            await updateExec.start({ hijack: true, stdin: false });
+            const updateInfo = await updateExec.inspect();
+            if (updateInfo.ExitCode !== 0) {
+              throw new Error('Failed to update Alpine package repository');
+            }
+
+            // Then install the required packages
+            const installCmd = `apk add --no-cache ${options.dependencies.join(' ')}`;
+            const installExec = await container.exec({
+              Cmd: ['sh', '-c', installCmd],
+              AttachStdout: true,
+              AttachStderr: true
+            });
+            await installExec.start({ hijack: true, stdin: false });
+            const installInfo = await installExec.inspect();
+            if (installInfo.ExitCode !== 0) {
+              throw new Error(`Failed to install Alpine packages: ${options.dependencies.join(', ')}`);
+            }
+          }
           command = ['sh', '-c', './code.sh'];
           break;
         default:
@@ -303,7 +328,7 @@ EOL`],
         case ContainerStrategy.PER_EXECUTION:
           container = await this.containerManager.createContainer({
             ...config.containerConfig,
-            image: this.getContainerImage(options.language),
+            image: config.containerConfig.image ? config.containerConfig.image : this.getContainerImage(options.language),
             mounts: [
               ...(config.containerConfig.mounts || []),
               {
@@ -313,6 +338,7 @@ EOL`],
               }
             ]
           });
+          this.containerToSession.set(container.id, sessionId);
           break;
 
         case ContainerStrategy.POOL: {
@@ -330,6 +356,7 @@ EOL`],
                 }
               ]
             });
+            this.containerToSession.set(container.id, sessionId);
           } else {
             container = pooledContainer;
           }
@@ -355,6 +382,7 @@ EOL`],
         await this.containerManager.returnContainerToPool(container);
       } else if (config.strategy === ContainerStrategy.PER_EXECUTION) {
         await container.remove({ force: true });
+        this.containerToSession.delete(container.id);
       }
 
       return result;
@@ -369,6 +397,7 @@ EOL`],
     if (container) {
       await container.remove({ force: true });
       this.sessionContainers.delete(sessionId);
+      this.containerToSession.delete(container.id);
     }
     this.sessionConfigs.delete(sessionId);
   }
@@ -377,5 +406,6 @@ EOL`],
     await this.containerManager.cleanup();
     this.sessionContainers.clear();
     this.sessionConfigs.clear();
+    this.containerToSession.clear();
   }
 } 
