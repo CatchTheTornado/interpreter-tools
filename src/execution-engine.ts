@@ -163,7 +163,7 @@ export class ExecutionEngine {
           command = ['sh', '-c', `${depsAlreadyInstalled ? '' : 'yarn install && '}node ${options.runApp.entryFile}`];
           break;
         case 'python':
-          command = ['sh', '-c', `if [ -f requirements.txt ]; then pip install -r requirements.txt 2>/dev/null; fi && python ${options.runApp.entryFile}`];
+          command = ['sh', '-c', `${depsAlreadyInstalled ? '' : 'if [ -f requirements.txt ]; then pip install -r requirements.txt 2>/dev/null; fi && '}py=$(command -v python3 || command -v python) && $py -u ${options.runApp.entryFile}`];
           break;
         case 'shell':
           command = ['sh', '-c', `chmod +x ${options.runApp.entryFile} && ./${options.runApp.entryFile}`];
@@ -245,7 +245,7 @@ EOL`],
           command = ['sh', '-c', `${depsAlreadyInstalled ? '' : 'yarn install && '}node code.js`];
           break;
         case 'python':
-          command = ['sh', '-c', 'if [ -f requirements.txt ]; then pip install -r requirements.txt 2>/dev/null; fi && python code.py'];
+          command = ['sh', '-c', `${depsAlreadyInstalled ? '' : 'if [ -f requirements.txt ]; then pip install -r requirements.txt 2>/dev/null; fi && '}py=$(command -v python3 || command -v python) && $py -u code.py`];
           break;
         case 'shell':
           // For shell scripts, install Alpine packages if dependencies are specified
@@ -370,7 +370,7 @@ EOL`],
             try {
               const info = await exec.inspect();
               // Mark container as having dependencies installed for future runs
-              if (!depsAlreadyInstalled && (options.language === 'javascript' || options.language === 'typescript')) {
+              if (!depsAlreadyInstalled && (options.language === 'javascript' || options.language === 'typescript' || options.language === 'python')) {
                 this.depsInstalledContainers.add(container.id);
               }
               resolve({
@@ -431,12 +431,14 @@ EOL`],
           // Check if a container is already assigned to this session
           let sessionContainer = this.sessionContainers.get(sessionId);
           if (!sessionContainer) {
+            const expectedImage = this.getContainerImage(options.language);
+
             const pooledContainer = await this.containerManager.getContainerFromPool();
             if (!pooledContainer) {
-              // No available container, create a fresh one and push to pool later on cleanup
+              // No available container, create a fresh one
               sessionContainer = await this.containerManager.createContainer({
                 ...config.containerConfig,
-                image: this.getContainerImage(options.language),
+                image: expectedImage,
                 mounts: [
                   ...(config.containerConfig.mounts || []),
                   {
@@ -447,9 +449,25 @@ EOL`],
                 ]
               });
             } else {
-              sessionContainer = pooledContainer;
-              // We need to mount the code directory into the container
-              // For simplicity, rely on code being copied into /workspace below (prepared code file)
+              // Validate image matches language; otherwise return and create new
+              const inspectInfo = await pooledContainer.inspect();
+              if (inspectInfo.Config.Image !== expectedImage) {
+                await this.containerManager.returnContainerToPool(pooledContainer);
+                sessionContainer = await this.containerManager.createContainer({
+                  ...config.containerConfig,
+                  image: expectedImage,
+                  mounts: [
+                    ...(config.containerConfig.mounts || []),
+                    {
+                      type: 'directory',
+                      source: codePath,
+                      target: '/workspace'
+                    }
+                  ]
+                });
+              } else {
+                sessionContainer = pooledContainer;
+              }
             }
             this.sessionContainers.set(sessionId, sessionContainer);
             this.containerToSession.set(sessionContainer.id, sessionId);
