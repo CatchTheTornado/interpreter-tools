@@ -1,14 +1,24 @@
 # Interpreter Tools
 
-A collection of tools for executing code in isolated environments using Docker containers.
+Run AI-generated code on your own machine—**locally, securely, at lightning speed**.  
 
-## Features
+Interpreter Tools is a drop-in **"code-interpreter"** backend for AI agents: it spins up **lightweight Docker containers**, executes untrusted snippets in < 100 ms (with pooling), streams the output, and can be **extended to any language** by registering a new config object.
 
-- Execute code in isolated Docker containers
-- Support for multiple programming languages (Node.js, Python, Shell)
-- Real-time output streaming
-- Dependency management
-- Configurable container strategies (per execution, per session, pool)
+Supports pooling, per-session containers, dependency caching, and real-time stdout/stderr—perfect for chat-based tools like GPT function calling, Jupyter-style notebooks, or autonomous agents that need to evaluate code on the fly.
+
+## Why Interpreter Tools?
+
+⚡ **Sub-100 ms average execution** (with container pool & dep-cache). Run untrusted code fast without leaving Node!
+
+🔌 **Plug-in language architecture** – add a new language by registering one object (see `LanguageRegistry`). No engine edits required.
+
+📦 **Zero-install repeat runs** – dependencies are installed once per container and skipped thereafter, saving seconds on every call.
+
+🔒 **Docker-level isolation** – each snippet executes in its own constrained container (CPU, memory, no-new-privileges).
+
+🖥️ **Real-time streaming** – stdout/stderr stream back instantly; ideal for REPL-like experiences.
+
+---
 
 ## Getting Started
 
@@ -270,6 +280,21 @@ Run it with:
 ```bash
 yarn ts-node examples/shell-example.ts
 ```
+
+### Benchmark Examples
+[`examples/benchmark-pool.ts`](./examples/benchmark-pool.ts) – JavaScript/TypeScript pool benchmark (20 rounds)
+
+```bash
+yarn ts-node examples/benchmark-pool.ts
+```
+
+[`examples/benchmark-pool-python.ts`](./examples/benchmark-pool-python.ts) – Python pool benchmark
+
+```bash
+yarn ts-node examples/benchmark-pool-python.ts
+```
+
+Average times on a MacBook M2 Pro: **JS 40 ms / round**, **Python 60 ms / round** after first run (deps cached).
 
 ## Usage
 
