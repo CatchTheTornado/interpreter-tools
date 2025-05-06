@@ -194,7 +194,23 @@ EOL`],
         AttachStdout: true,
         AttachStderr: true
       });
-      await writeExec.start({ hijack: true, stdin: false });
+      const writeStream = await writeExec.start({ hijack: true, stdin: false });
+
+      // Wait for the write operation to complete
+      await new Promise<void>((resolve, reject) => {
+        writeStream.on('end', async () => {
+          try {
+            const info = await writeExec.inspect();
+            if ((info.ExitCode ?? 1) !== 0) {
+              reject(new Error('Failed to write code to workspace'));
+            } else {
+              resolve();
+            }
+          } catch (err) {
+            reject(err);
+          }
+        });
+      });
 
       // List workspace contents only in verbose mode
       if (options.verbose) {

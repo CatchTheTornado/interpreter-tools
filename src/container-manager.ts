@@ -143,7 +143,24 @@ export class ContainerManager {
           AttachStdout: true,
           AttachStderr: true
         });
-        await exec.start({ hijack: true, stdin: false });
+        const stream = await exec.start({ hijack: true, stdin: false });
+
+        // Wait for cleanup to complete before reusing container
+        await new Promise<void>((resolve, reject) => {
+          stream.on('end', async () => {
+            try {
+              const info = await exec.inspect();
+              if ((info.ExitCode ?? 1) !== 0) {
+                reject(new Error('Failed to clean workspace in pooled container'));
+              } else {
+                resolve();
+              }
+            } catch (err) {
+              reject(err);
+            }
+          });
+        });
+
         return availableContainer.container;
       } catch (error) {
         console.error('Error starting pooled container:', error);
