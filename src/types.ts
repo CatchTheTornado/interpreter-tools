@@ -12,6 +12,10 @@ export interface ExecutionOptions {
     cwd: string;
     entryFile: string;  // Path to the entry file relative to the mounted directory
   };
+  streamOutput?: {
+    stdout?: (data: string) => void;
+    stderr?: (data: string) => void;
+  };
 }
 
 export interface MountOptions {

@@ -18,7 +18,12 @@ const codeExecutionSchema = z.object({
   runApp: z.object({
     entryFile: z.string().describe('Path to the entry file relative to the mounted directory'),
     cwd: z.string().describe('Working directory path that should be mounted')
-  }).optional().describe('Optional configuration for running an entire application')
+  }).optional().describe('Optional configuration for running an entire application'),
+  streamOutput: z.object({
+    stdout: z.function().args(z.string()).optional(),
+    stderr: z.function().args(z.string()).optional(),
+    stdin: z.function().args(z.string()).optional()
+  }).optional().describe('Optional streaming output handlers')
 });
 
 interface CodeExecutionToolConfig {
@@ -35,7 +40,8 @@ export function createCodeExecutionTool(config: CodeExecutionToolConfig = {}) {
       dependencies = [], 
       strategy = 'per_execution',
       environment = {},
-      runApp
+      runApp,
+      streamOutput
     }: z.infer<typeof codeExecutionSchema>): Promise<CodeExecutionResult> => {
       const engine = new ExecutionEngine();
 
@@ -53,7 +59,8 @@ export function createCodeExecutionTool(config: CodeExecutionToolConfig = {}) {
           language,
           code,
           dependencies,
-          runApp
+          runApp,
+          streamOutput
         });
 
         return result;

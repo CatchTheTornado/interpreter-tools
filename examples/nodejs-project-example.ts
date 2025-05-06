@@ -70,6 +70,8 @@ Separate each file with a blank line.`
       }]
     });
 
+    console.log('Executing project...');
+    
     // Execute the project using codeExecutionTool
     const executionResult = await codeExecutionTool.execute({
       language: 'javascript',
@@ -78,12 +80,18 @@ Separate each file with a blank line.`
         entryFile: 'server.js',
         cwd: '/project'
       },
-      dependencies: ['express']
+      dependencies: ['express'],
+      streamOutput: {
+        stdout: (data) => {
+          console.log('Container stdout:', data);
+        },
+        stderr: (data) => {
+          console.error('Container stderr:', data);
+        }
+      }
     });
 
     console.log('Project Execution Result:');
-    console.log('STDOUT:', executionResult.stdout);
-    console.log('STDERR:', executionResult.stderr);
     console.log('Exit Code:', executionResult.exitCode);
     console.log('Execution Time:', executionResult.executionTime, 'ms');
 

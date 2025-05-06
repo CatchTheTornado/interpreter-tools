@@ -243,11 +243,19 @@ EOL`],
 
           container.modem.demuxStream(stream as Duplex, {
             write: (chunk: Buffer) => {
-              stdout += chunk.toString();
+              const data = chunk.toString();
+              stdout += data;
+              if (options.streamOutput?.stdout) {
+                options.streamOutput.stdout(data);
+              }
             }
           }, {
             write: (chunk: Buffer) => {
-              stderr += chunk.toString();
+              const data = chunk.toString();
+              stderr += data;
+              if (options.streamOutput?.stderr) {
+                options.streamOutput.stderr(data);
+              }
             }
           });
 
