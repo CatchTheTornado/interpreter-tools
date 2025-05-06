@@ -216,10 +216,31 @@ EOL`],
               AttachStdout: true,
               AttachStderr: true
             });
-            await updateExec.start({ hijack: true, stdin: false });
+            let updateOutput = '';
+            const updateStream = await updateExec.start({ hijack: true, stdin: false });
+            await new Promise((resolve) => {
+              container.modem.demuxStream(updateStream as Duplex, {
+                write: (chunk: Buffer) => {
+                  const data = chunk.toString();
+                  updateOutput += data;
+                  if (options.streamOutput?.stdout) {
+                    options.streamOutput.stdout(data);
+                  }
+                }
+              }, {
+                write: (chunk: Buffer) => {
+                  const data = chunk.toString();
+                  updateOutput += data;
+                  if (options.streamOutput?.stderr) {
+                    options.streamOutput.stderr(data);
+                  }
+                }
+              });
+              updateStream.on('end', resolve);
+            });
             const updateInfo = await updateExec.inspect();
             if (updateInfo.ExitCode !== 0) {
-              throw new Error('Failed to update Alpine package repository');
+              throw new Error(`Failed to update Alpine package repository: ${updateOutput}`);
             }
 
             // Then install the required packages
@@ -229,10 +250,31 @@ EOL`],
               AttachStdout: true,
               AttachStderr: true
             });
-            await installExec.start({ hijack: true, stdin: false });
+            let installOutput = '';
+            const installStream = await installExec.start({ hijack: true, stdin: false });
+            await new Promise((resolve) => {
+              container.modem.demuxStream(installStream as Duplex, {
+                write: (chunk: Buffer) => {
+                  const data = chunk.toString();
+                  installOutput += data;
+                  if (options.streamOutput?.stdout) {
+                    options.streamOutput.stdout(data);
+                  }
+                }
+              }, {
+                write: (chunk: Buffer) => {
+                  const data = chunk.toString();
+                  installOutput += data;
+                  if (options.streamOutput?.stderr) {
+                    options.streamOutput.stderr(data);
+                  }
+                }
+              });
+              installStream.on('end', resolve);
+            });
             const installInfo = await installExec.inspect();
             if (installInfo.ExitCode !== 0) {
-              throw new Error(`Failed to install Alpine packages: ${options.dependencies.join(', ')}`);
+              throw new Error(`Failed to install Alpine packages: ${options.dependencies.join(', ')}\nOutput: ${installOutput}`);
             }
           }
           command = ['sh', '-c', './code.sh'];
