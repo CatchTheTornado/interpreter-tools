@@ -20,14 +20,14 @@ export class ExecutionEngine {
   private sessionContainers: Map<string, Docker.Container>;
   private sessionConfigs: Map<string, SessionConfig>;
   private containerToSession: Map<string, string>;
-  // Map to keep dedicated pool containers per session
-  // (reuses sessionContainers for POOL as well)
+  private depsInstalledContainers: Set<string>;
 
   constructor() {
     this.containerManager = new ContainerManager();
     this.sessionContainers = new Map();
     this.sessionConfigs = new Map();
     this.containerToSession = new Map();
+    this.depsInstalledContainers = new Set();
   }
 
   private async prepareCodeFile(options: ExecutionOptions): Promise<string> {
@@ -138,6 +138,9 @@ export class ExecutionEngine {
     let command: string[];
     let workingDir = '/workspace';
 
+    // Determine if dependencies are already installed for this container (JS/TS)
+    const depsAlreadyInstalled = this.depsInstalledContainers.has(container.id);
+
     if (options.runApp) {
       // Validate that the working directory is mounted
       const cwdMount = config.containerConfig.mounts?.find(
@@ -154,10 +157,10 @@ export class ExecutionEngine {
       // as it's already in the mounted directory
       switch (options.language) {
         case 'typescript':
-          command = ['sh', '-c', `yarn install && npx ts-node ${options.runApp.entryFile}`];
+          command = ['sh', '-c', `${depsAlreadyInstalled ? '' : 'yarn install && '}npx ts-node ${options.runApp.entryFile}`];
           break;
         case 'javascript':
-          command = ['sh', '-c', `yarn install && node ${options.runApp.entryFile}`];
+          command = ['sh', '-c', `${depsAlreadyInstalled ? '' : 'yarn install && '}node ${options.runApp.entryFile}`];
           break;
         case 'python':
           command = ['sh', '-c', `if [ -f requirements.txt ]; then pip install -r requirements.txt 2>/dev/null; fi && python ${options.runApp.entryFile}`];
@@ -236,10 +239,10 @@ EOL`],
 
       switch (options.language) {
         case 'typescript':
-          command = ['sh', '-c', 'yarn install && npx ts-node code.ts'];
+          command = ['sh', '-c', `${depsAlreadyInstalled ? '' : 'yarn install && '}npx ts-node code.ts`];
           break;
         case 'javascript':
-          command = ['sh', '-c', 'yarn install && node code.js'];
+          command = ['sh', '-c', `${depsAlreadyInstalled ? '' : 'yarn install && '}node code.js`];
           break;
         case 'python':
           command = ['sh', '-c', 'if [ -f requirements.txt ]; then pip install -r requirements.txt 2>/dev/null; fi && python code.py'];
@@ -366,6 +369,10 @@ EOL`],
           stream.on('end', async () => {
             try {
               const info = await exec.inspect();
+              // Mark container as having dependencies installed for future runs
+              if (!depsAlreadyInstalled && (options.language === 'javascript' || options.language === 'typescript')) {
+                this.depsInstalledContainers.add(container.id);
+              }
               resolve({
                 stdout,
                 stderr,
