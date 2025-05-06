@@ -117,4 +117,8 @@ export class LanguageRegistry {
   static list(): LanguageConfig[] {
     return Array.from(this.configs.values());
   }
+
+  static names(): string[] {
+    return Array.from(this.configs.keys());
+  }
 } 

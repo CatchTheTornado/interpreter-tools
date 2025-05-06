@@ -1,5 +1,7 @@
 # Interpreter Tools
 
+<img src=".readme-assets/hero.png" />
+
 Run AI-generated code on your own machine—**locally, securely, at lightning speed**.  
 
 Interpreter Tools is a drop-in **"code-interpreter"** backend for AI agents: it spins up **lightweight Docker containers**, executes untrusted snippets in < 100 ms (with pooling), streams the output, and can be **extended to any language** by registering a new config object.
