@@ -123,10 +123,30 @@ export class ContainerManager {
     return container;
   }
 
-  async getContainerFromPool(): Promise<Docker.Container | null> {
+  async getContainerFromPool(expectedImage?: string): Promise<Docker.Container | null> {
     // First, try to find an available container that's not in use
-    const availableContainer = this.pool.find(c => !c.inUse);
-    
+    let availableContainer: PooledContainer | undefined;
+
+    if (expectedImage) {
+      // Find container that matches expected image
+      for (const c of this.pool) {
+        if (c.inUse) continue;
+        try {
+          const inspectInfo = await c.container.inspect();
+          const currentImage = inspectInfo.Config.Image.replace(/^.*\//, '');
+          const targetImage = expectedImage.replace(/^.*\//, '');
+          if (currentImage === targetImage) {
+            availableContainer = c;
+            break;
+          }
+        } catch (err) {
+          console.error('Error inspecting pooled container:', err);
+        }
+      }
+    } else {
+      availableContainer = this.pool.find(c => !c.inUse);
+    }
+
     if (availableContainer) {
       availableContainer.inUse = true;
       availableContainer.lastUsed = Date.now();

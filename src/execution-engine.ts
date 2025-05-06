@@ -437,24 +437,40 @@ EOL`],
           // Check if a container is already assigned to this session
           let sessionContainer = this.sessionContainers.get(sessionId);
           if (!sessionContainer) {
-            const expectedImage = this.getContainerImage(options.language);
+            const expectedImage = config.containerConfig.image ? config.containerConfig.image : this.getContainerImage(options.language);
 
-            const pooledContainer = await this.containerManager.getContainerFromPool();
+            const pooledContainer = await this.containerManager.getContainerFromPool(expectedImage);
             if (!pooledContainer) {
               // No available container, create a fresh one
               sessionContainer = await this.containerManager.createContainer({
                 ...config.containerConfig,
-                image: expectedImage
+                image: expectedImage,
+                mounts: [
+                  ...(config.containerConfig.mounts || []),
+                  {
+                    type: 'directory',
+                    source: codePath,
+                    target: '/workspace'
+                  }
+                ]
               });
             } else {
               // Validate image matches language; otherwise return and create new
               const inspectInfo = await pooledContainer.inspect();
               if (!this.imageMatches(expectedImage, inspectInfo.Config.Image)) {
+                console.log('Image mismatch, expected:', expectedImage, 'actual:', inspectInfo.Config.Image);
                 await this.containerManager.returnContainerToPool(pooledContainer);
-                // Create a fresh container with the expected image
                 sessionContainer = await this.containerManager.createContainer({
                   ...config.containerConfig,
-                  image: expectedImage
+                  image: expectedImage,
+                  mounts: [
+                    ...(config.containerConfig.mounts || []),
+                    {
+                      type: 'directory',
+                      source: codePath,
+                      target: '/workspace'
+                    }
+                  ]
                 });
               } else {
                 sessionContainer = pooledContainer;
