@@ -128,11 +128,6 @@ export class ExecutionEngine {
     }
   }
 
-  private imageMatches(expected: string, actual: string): boolean {
-    // Simple check: ignore registry prefix and compare repository name and tag
-    const strip = (img: string) => img.replace(/^.*\//, '');
-    return strip(actual) === strip(expected);
-  }
 
   private async executeInContainer(
     container: Docker.Container,
@@ -438,7 +433,6 @@ EOL`],
           let sessionContainer = this.sessionContainers.get(sessionId);
           if (!sessionContainer) {
             const expectedImage = config.containerConfig.image ? config.containerConfig.image : this.getContainerImage(options.language);
-
             const pooledContainer = await this.containerManager.getContainerFromPool(expectedImage);
             if (!pooledContainer) {
               // No available container, create a fresh one
@@ -455,26 +449,7 @@ EOL`],
                 ]
               });
             } else {
-              // Validate image matches language; otherwise return and create new
-              const inspectInfo = await pooledContainer.inspect();
-              if (!this.imageMatches(expectedImage, inspectInfo.Config.Image)) {
-                console.log('Image mismatch, expected:', expectedImage, 'actual:', inspectInfo.Config.Image);
-                await this.containerManager.returnContainerToPool(pooledContainer);
-                sessionContainer = await this.containerManager.createContainer({
-                  ...config.containerConfig,
-                  image: expectedImage,
-                  mounts: [
-                    ...(config.containerConfig.mounts || []),
-                    {
-                      type: 'directory',
-                      source: codePath,
-                      target: '/workspace'
-                    }
-                  ]
-                });
-              } else {
-                sessionContainer = pooledContainer;
-              }
+              sessionContainer = pooledContainer;
             }
             this.sessionContainers.set(sessionId, sessionContainer);
             this.containerToSession.set(sessionContainer.id, sessionId);

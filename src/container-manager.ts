@@ -123,6 +123,13 @@ export class ContainerManager {
     return container;
   }
 
+
+  private imageMatches(expected: string, actual: string): boolean {
+    // Simple check: ignore registry prefix and compare repository name and tag
+    const strip = (img: string) => img.replace(/^.*\//, '');
+    return strip(actual) === strip(expected);
+  }
+  
   async getContainerFromPool(expectedImage?: string): Promise<Docker.Container | null> {
     // First, try to find an available container that's not in use
     let availableContainer: PooledContainer | undefined;
@@ -133,9 +140,7 @@ export class ContainerManager {
         if (c.inUse) continue;
         try {
           const inspectInfo = await c.container.inspect();
-          const currentImage = inspectInfo.Config.Image.replace(/^.*\//, '');
-          const targetImage = expectedImage.replace(/^.*\//, '');
-          if (currentImage === targetImage) {
+          if (this.imageMatches(expectedImage, inspectInfo.Config.Image)) {
             availableContainer = c;
             break;
           }
@@ -146,7 +151,6 @@ export class ContainerManager {
     } else {
       availableContainer = this.pool.find(c => !c.inUse);
     }
-
     if (availableContainer) {
       availableContainer.inUse = true;
       availableContainer.lastUsed = Date.now();
@@ -202,7 +206,7 @@ export class ContainerManager {
     if (this.pool.length < this.poolConfig.maxSize) {
       try {
         const container = await this.createContainer({
-          image: 'node:18-alpine', // Default image, will be changed by execution engine
+          image: expectedImage ?? 'node:18-alpine', // Default image, will be changed by execution engine
           mounts: []
         });
         
