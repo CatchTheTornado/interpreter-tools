@@ -91,6 +91,78 @@ require('dotenv').config();
 node example.js
 ```
 
+### Direct ExecutionEngine Usage
+
+If you prefer to use the ExecutionEngine directly without the AI integration, here's how to do it:
+
+1. Create a new file `direct-example.js`:
+
+```javascript
+const { ExecutionEngine, ContainerStrategy } = require('interpreter-tools');
+
+async function main() {
+  const engine = new ExecutionEngine();
+
+  try {
+    // Create a session with per-execution strategy
+    const sessionId = await engine.createSession({
+      strategy: ContainerStrategy.PER_EXECUTION,
+      containerConfig: {
+        image: 'node:18-alpine',
+        environment: {
+          NODE_ENV: 'development'
+        }
+      }
+    });
+
+    // Execute JavaScript code
+    const result = await engine.executeCode(sessionId, {
+      language: 'javascript',
+      code: `
+const numbers = [1, 2, 3, 4, 5];
+const sum = numbers.reduce((a, b) => a + b, 0);
+const average = sum / numbers.length;
+
+console.log('Numbers:', numbers);
+console.log('Sum:', sum);
+console.log('Average:', average);
+      `,
+      streamOutput: {
+        stdout: (data) => console.log('Container output:', data),
+        stderr: (data) => console.error('Container error:', data)
+      }
+    });
+
+    console.log('Execution Result:');
+    console.log('STDOUT:', result.stdout);
+    console.log('STDERR:', result.stderr);
+    console.log('Exit Code:', result.exitCode);
+    console.log('Execution Time:', result.executionTime, 'ms');
+
+  } catch (error) {
+    console.error('Error:', error);
+  } finally {
+    // Clean up resources
+    await engine.cleanup();
+  }
+}
+
+main();
+```
+
+2. Run the example:
+
+```bash
+node direct-example.js
+```
+
+This example demonstrates:
+- Creating a session with a specific container strategy
+- Configuring the container environment
+- Executing code directly in the container
+- Handling real-time output streaming
+- Proper resource cleanup
+
 ### TypeScript Support
 
 If you're using TypeScript, you can import the packages with type definitions:
