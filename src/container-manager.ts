@@ -132,7 +132,11 @@ export class ContainerManager {
       availableContainer.lastUsed = Date.now();
       
       try {
-        await availableContainer.container.start();
+        // Start the container only if it is not already running
+        const inspectInfo = await availableContainer.container.inspect();
+        if (!inspectInfo.State.Running) {
+          await availableContainer.container.start();
+        }
         // Clean workspace
         const exec = await availableContainer.container.exec({
           Cmd: ['sh', '-c', 'rm -rf /workspace/*'],

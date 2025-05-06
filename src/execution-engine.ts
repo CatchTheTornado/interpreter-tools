@@ -168,8 +168,27 @@ export class ExecutionEngine {
       }
     } else {
       // Write code directly to workspace
+      // Determine the correct filename based on language
+      let workspaceFilename: string;
+      switch (options.language) {
+        case 'typescript':
+          workspaceFilename = 'code.ts';
+          break;
+        case 'javascript':
+          workspaceFilename = 'code.js';
+          break;
+        case 'python':
+          workspaceFilename = 'code.py';
+          break;
+        case 'shell':
+          workspaceFilename = 'code.sh';
+          break;
+        default:
+          throw new Error(`Unsupported language: ${options.language}`);
+      }
+
       const writeExec = await container.exec({
-        Cmd: ['sh', '-c', `cat > /workspace/code.py << 'EOL'
+        Cmd: ['sh', '-c', `cat > /workspace/${workspaceFilename} << 'EOL'
 ${options.code.trim()}
 EOL`],
         AttachStdout: true,
