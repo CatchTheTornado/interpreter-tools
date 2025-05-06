@@ -7,14 +7,6 @@ import Docker from 'dockerode';
 import { Duplex } from 'stream';
 import { LanguageRegistry } from './languages';
 
-interface PackageJson {
-  name: string;
-  version: string;
-  private: boolean;
-  license: string;
-  dependencies: Record<string, string>;
-  devDependencies: Record<string, string>;
-}
 
 export class ExecutionEngine {
   private containerManager: ContainerManager;

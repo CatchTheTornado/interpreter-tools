@@ -366,6 +366,143 @@ const result = await codeExecutionTool.execute({
 });
 ```
 
+## Documentation
+
+### Architecture Overview
+
+Interpreter Tools is composed of three core layers:
+
+| Layer | Responsibility |
+|-------|---------------|
+| **ExecutionEngine** | High-level façade that orchestrates container lifecycle, dependency caching, and code execution. |
+| **ContainerManager** | Low-level wrapper around Dockerode that creates, starts, pools, and cleans containers. |
+| **LanguageRegistry** | Pluggable store of `LanguageConfig` objects that describe how to build/run code for each language. |
+
+All user-facing helpers (e.g. the `codeExecutionTool` for AI agents) are thin wrappers that forward to `ExecutionEngine`.
+
+```mermaid
+graph TD;
+  subgraph Runtime
+    A[ExecutionEngine]
+    B[ContainerManager]
+    C[Docker]
+  end
+  D[LanguageRegistry]
+  A --> B --> C
+  A --> D
+```
+
+---
+
+### Public API
+
+#### `ExecutionEngine`
+
+```typescript
+new ExecutionEngine()
+
+createSession(config: SessionConfig): Promise<string>
+executeCode(sessionId: string, options: ExecutionOptions): Promise<ExecutionResult>
+cleanupSession(sessionId: string): Promise<void>
+cleanup(): Promise<void>
+```
+
+* **SessionConfig** – chooses a `ContainerStrategy` (`PER_EXECUTION`, `POOL`, `PER_SESSION`) and passes a `containerConfig` (image, env, mounts, limits).
+* **ExecutionOptions** – language, code snippet, optional dependencies, stream handlers, etc.
+* **ExecutionResult** – `{ stdout, stderr, exitCode, executionTime }`.
+
+#### `createCodeExecutionTool()`
+
+Factory that exposes the engine as an [OpenAI function-calling](https://platform.openai.com/docs/guides/function-calling)-friendly tool. It validates parameters with _Zod_ and returns the same `ExecutionResult`.
+
+```typescript
+import { createCodeExecutionTool } from 'interpreter-tools';
+
+const tool = createCodeExecutionTool();
+const { stdout } = await tool.execute({
+  language: 'python',
+  code: 'print("Hello")'
+});
+```
+
+#### `LanguageRegistry`
+
+```typescript
+LanguageRegistry.get(name): LanguageConfig | undefined
+LanguageRegistry.register(config: LanguageConfig): void
+LanguageRegistry.names(): string[]
+```
+
+`LanguageConfig` fields:
+
+```typescript
+interface LanguageConfig {
+  language: string;                    // identifier
+  defaultImage: string;                // docker image
+  codeFilename: string;                // filename inside /workspace for inline code
+  prepareFiles(options, dir): void;    // write code + metadata into temp dir
+  buildInlineCommand(depsInstalled): string[];
+  buildRunAppCommand(entry, depsInstalled): string[];
+  installDependencies?(container, options): Promise<void>; // optional pre-exec hook
+}
+```
+
+---
+
+### Adding a New Language
+
+1. Create a `LanguageConfig` object (see the [Ruby example](#extending-with-new-languages-ruby-example)).
+2. Call `LanguageRegistry.register(config)` **once** at startup.
+3. Provide a suitable Docker image that has the runtime installed.
+
+No changes to `ExecutionEngine` are required.
+
+---
+
+### Container Strategies
+
+| Strategy | Description | When to use |
+|----------|-------------|-------------|
+| **PER_EXECUTION** | New container per snippet; removed immediately. | Maximum isolation; slowest. |
+| **POOL** | Containers are pooled per session and reused—workspace is wiped between runs. | Best latency / resource trade-off for chat bots. |
+| **PER_SESSION** | One dedicated container for the whole session; not pooled. | Long-running interactive notebooks. |
+
+---
+
+### Mounts & Environment Variables
+
+`containerConfig` accepts:
+
+```typescript
+{
+  image?: string;            // overrides language default
+  mounts?: ContainerMount[]; // { type: 'directory' | 'tmpfs', source, target }
+  environment?: Record<string, string>;
+  cpuLimit?: string;         // e.g. '0.5'
+  memoryLimit?: string;      // e.g. '512m'
+}
+```
+
+---
+
+### Streaming Output
+
+Pass `streamOutput: { stdout?, stderr? }` in `ExecutionOptions` to receive data chunks in real time while the process runs.
+
+```typescript
+await engine.executeCode(id, {
+  language: 'shell',
+  code: 'for i in 1 2 3; do echo $i; sleep 1; done',
+  streamOutput: {
+    stdout: (d) => process.stdout.write(d)
+  }
+});
+```
+
+---
+
+Happy hacking! ��
+
 ## License
 
 MIT 
