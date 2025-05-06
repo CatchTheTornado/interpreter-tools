@@ -28,6 +28,8 @@ Supports pooling, per-session containers, dependency caching, and real-time stdo
 
 ### Installation
 
+Interpreter Tools is published on npm as [`interpreter-tools`](https://www.npmjs.com/package/interpreter-tools).
+
 Install the package and its dependencies in your Node.js project:
 
 ```bash
