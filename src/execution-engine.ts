@@ -444,32 +444,17 @@ EOL`],
               // No available container, create a fresh one
               sessionContainer = await this.containerManager.createContainer({
                 ...config.containerConfig,
-                image: expectedImage,
-                mounts: [
-                  ...(config.containerConfig.mounts || []),
-                  {
-                    type: 'directory',
-                    source: codePath,
-                    target: '/workspace'
-                  }
-                ]
+                image: expectedImage
               });
             } else {
               // Validate image matches language; otherwise return and create new
               const inspectInfo = await pooledContainer.inspect();
               if (!this.imageMatches(expectedImage, inspectInfo.Config.Image)) {
                 await this.containerManager.returnContainerToPool(pooledContainer);
+                // Create a fresh container with the expected image
                 sessionContainer = await this.containerManager.createContainer({
                   ...config.containerConfig,
-                  image: expectedImage,
-                  mounts: [
-                    ...(config.containerConfig.mounts || []),
-                    {
-                      type: 'directory',
-                      source: codePath,
-                      target: '/workspace'
-                    }
-                  ]
+                  image: expectedImage
                 });
               } else {
                 sessionContainer = pooledContainer;
