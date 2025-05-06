@@ -20,6 +20,8 @@ export class ExecutionEngine {
   private sessionContainers: Map<string, Docker.Container>;
   private sessionConfigs: Map<string, SessionConfig>;
   private containerToSession: Map<string, string>;
+  // Map to keep dedicated pool containers per session
+  // (reuses sessionContainers for POOL as well)
 
   constructor() {
     this.containerManager = new ContainerManager();
@@ -419,24 +421,33 @@ EOL`],
           break;
 
         case ContainerStrategy.POOL: {
-          const pooledContainer = await this.containerManager.getContainerFromPool();
-          if (!pooledContainer) {
-            container = await this.containerManager.createContainer({
-              ...config.containerConfig,
-              image: this.getContainerImage(options.language),
-              mounts: [
-                ...(config.containerConfig.mounts || []),
-                {
-                  type: 'directory',
-                  source: codePath,
-                  target: '/workspace'
-                }
-              ]
-            });
-            this.containerToSession.set(container.id, sessionId);
-          } else {
-            container = pooledContainer;
+          // Check if a container is already assigned to this session
+          let sessionContainer = this.sessionContainers.get(sessionId);
+          if (!sessionContainer) {
+            const pooledContainer = await this.containerManager.getContainerFromPool();
+            if (!pooledContainer) {
+              // No available container, create a fresh one and push to pool later on cleanup
+              sessionContainer = await this.containerManager.createContainer({
+                ...config.containerConfig,
+                image: this.getContainerImage(options.language),
+                mounts: [
+                  ...(config.containerConfig.mounts || []),
+                  {
+                    type: 'directory',
+                    source: codePath,
+                    target: '/workspace'
+                  }
+                ]
+              });
+            } else {
+              sessionContainer = pooledContainer;
+              // We need to mount the code directory into the container
+              // For simplicity, rely on code being copied into /workspace below (prepared code file)
+            }
+            this.sessionContainers.set(sessionId, sessionContainer);
+            this.containerToSession.set(sessionContainer.id, sessionId);
           }
+          container = sessionContainer;
           break;
         }
 
@@ -456,7 +467,7 @@ EOL`],
       const result = await this.executeInContainer(container, options, config, codePath);
 
       if (config.strategy === ContainerStrategy.POOL) {
-        await this.containerManager.returnContainerToPool(container);
+        // Do nothing here; container remains assigned for session lifetime.
       } else if (config.strategy === ContainerStrategy.PER_EXECUTION) {
         await container.remove({ force: true });
         this.containerToSession.delete(container.id);
@@ -471,8 +482,15 @@ EOL`],
 
   async cleanupSession(sessionId: string): Promise<void> {
     const container = this.sessionContainers.get(sessionId);
+    const config = this.sessionConfigs.get(sessionId);
+
     if (container) {
-      await container.remove({ force: true });
+      if (config?.strategy === ContainerStrategy.POOL) {
+        // Return container to pool after cleaning up workspace via ContainerManager
+        await this.containerManager.returnContainerToPool(container);
+      } else {
+        await container.remove({ force: true });
+      }
       this.sessionContainers.delete(sessionId);
       this.containerToSession.delete(container.id);
     }
