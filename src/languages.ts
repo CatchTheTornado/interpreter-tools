@@ -1,6 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { ExecutionOptions } from './types';
+import Docker from 'dockerode';
+import { Duplex } from 'stream';
 
 export interface LanguageConfig {
   language: string;
@@ -9,6 +11,7 @@ export interface LanguageConfig {
   prepareFiles: (options: ExecutionOptions, tempDir: string) => void;
   buildInlineCommand: (depsInstalled: boolean) => string[];
   buildRunAppCommand: (entryFile: string, depsInstalled: boolean) => string[];
+  installDependencies?: (container: Docker.Container, options: ExecutionOptions) => Promise<void>;
 }
 
 const jsTsPrepare = (options: ExecutionOptions, tempDir: string, filename: string) => {
@@ -97,7 +100,73 @@ export const defaultLanguageConfigs: LanguageConfig[] = [
       fs.chmodSync(filepath, '755');
     },
     buildInlineCommand: () => ['sh', '-c', './code.sh'],
-    buildRunAppCommand: (entry) => ['sh', '-c', `chmod +x ${entry} && ./${entry}`]
+    buildRunAppCommand: (entry) => ['sh', '-c', `chmod +x ${entry} && ./${entry}`],
+    installDependencies: async (container, options) => {
+      if (!options.dependencies || options.dependencies.length === 0) return;
+
+      // Update Alpine package repository
+      const updateExec = await container.exec({
+        Cmd: ['sh', '-c', 'apk update'],
+        AttachStdout: true,
+        AttachStderr: true
+      });
+      let updateOutput = '';
+      const updateStream = await updateExec.start({ hijack: true, stdin: false });
+      await new Promise((resolve) => {
+        container.modem.demuxStream(updateStream as Duplex,
+          { write: (chunk: Buffer) => {
+              updateOutput += chunk.toString();
+              if (options.streamOutput?.stdout) {
+                options.streamOutput.stdout(chunk.toString());
+              }
+            }
+          },
+          { write: (chunk: Buffer) => {
+              updateOutput += chunk.toString();
+              if (options.streamOutput?.stderr) {
+                options.streamOutput.stderr(chunk.toString());
+              }
+            }
+          });
+        updateStream.on('end', resolve);
+      });
+      const updateInfo = await updateExec.inspect();
+      if (updateInfo.ExitCode !== 0) {
+        throw new Error(`Failed to update Alpine package repository: ${updateOutput}`);
+      }
+
+      // Install requested packages
+      const installCmd = `apk add --no-cache ${options.dependencies.join(' ')}`;
+      const installExec = await container.exec({
+        Cmd: ['sh', '-c', installCmd],
+        AttachStdout: true,
+        AttachStderr: true
+      });
+      let installOutput = '';
+      const installStream = await installExec.start({ hijack: true, stdin: false });
+      await new Promise((resolve) => {
+        container.modem.demuxStream(installStream as Duplex,
+          { write: (chunk: Buffer) => {
+              installOutput += chunk.toString();
+              if (options.streamOutput?.stdout) {
+                options.streamOutput.stdout(chunk.toString());
+              }
+            }
+          },
+          { write: (chunk: Buffer) => {
+              installOutput += chunk.toString();
+              if (options.streamOutput?.stderr) {
+                options.streamOutput.stderr(chunk.toString());
+              }
+            }
+          });
+        installStream.on('end', resolve);
+      });
+      const installInfo = await installExec.inspect();
+      if (installInfo.ExitCode !== 0) {
+        throw new Error(`Failed to install Alpine packages: ${options.dependencies.join(', ')}\nOutput: ${installOutput}`);
+      }
+    }
   }
 ];
 

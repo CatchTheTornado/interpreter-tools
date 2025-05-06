@@ -30,11 +30,11 @@ async function main() {
     messages: [
       {
         role: 'user',
-        content: 'Write a Ruby script that prints "Hello from Ruby" and the current time. Use the codeExecutionTool to run the script - it supports Ruby'
+        content: 'Write a Ruby script that prints "Hello from Ruby" plus calculating fibonacci, then call the fib(10), take the current time and return it as a nice string. Run the script using the tool provided.'
       }
     ],
     tools: { codeExecutionTool: tool },
-    toolChoice: 'auto'
+    toolChoice: 'required'
   });
 
   console.log('AI returned:', result.text);

@@ -76,23 +76,13 @@ export class ExecutionEngine {
       workingDir = options.runApp.cwd;
 
       // For running entire applications, we don't need to write the code file
-      // as it's already in the mounted directory
-      switch (options.language) {
-        case 'typescript':
-          command = ['sh', '-c', `${depsAlreadyInstalled ? '' : 'yarn install && '}npx ts-node ${options.runApp.entryFile}`];
-          break;
-        case 'javascript':
-          command = ['sh', '-c', `${depsAlreadyInstalled ? '' : 'yarn install && '}node ${options.runApp.entryFile}`];
-          break;
-        case 'python':
-          command = ['sh', '-c', `${depsAlreadyInstalled ? '' : 'if [ -f requirements.txt ]; then pip install -r requirements.txt 2>/dev/null; fi && '}py=$(command -v python3 || command -v python) && $py -u ${options.runApp.entryFile}`];
-          break;
-        case 'shell':
-          command = ['sh', '-c', `chmod +x ${options.runApp.entryFile} && ./${options.runApp.entryFile}`];
-          break;
-        default:
-          throw new Error(`Unsupported language: ${options.language}`);
+      // as it's already in the mounted directory. Build the command via the LanguageRegistry.
+      const langCfgRunApp = LanguageRegistry.get(options.language);
+      if (!langCfgRunApp) {
+        throw new Error(`Unsupported language: ${options.language}`);
       }
+
+      command = langCfgRunApp.buildRunAppCommand(options.runApp.entryFile, depsAlreadyInstalled);
     } else {
       // Write code directly to workspace
       // Determine the correct filename based on language
@@ -144,91 +134,13 @@ EOL`],
         });
       }
 
-      switch (options.language) {
-        case 'typescript':
-          command = ['sh', '-c', `${depsAlreadyInstalled ? '' : 'yarn install && '}npx ts-node code.ts`];
-          break;
-        case 'javascript':
-          command = ['sh', '-c', `${depsAlreadyInstalled ? '' : 'yarn install && '}node code.js`];
-          break;
-        case 'python':
-          command = ['sh', '-c', `${depsAlreadyInstalled ? '' : 'if [ -f requirements.txt ]; then pip install -r requirements.txt 2>/dev/null; fi && '}py=$(command -v python3 || command -v python) && $py -u code.py`];
-          break;
-        case 'shell':
-          // For shell scripts, install Alpine packages if dependencies are specified
-          if (options.dependencies && options.dependencies.length > 0) {
-            // First update the package repository
-            const updateExec = await container.exec({
-              Cmd: ['sh', '-c', 'apk update'],
-              AttachStdout: true,
-              AttachStderr: true
-            });
-            let updateOutput = '';
-            const updateStream = await updateExec.start({ hijack: true, stdin: false });
-            await new Promise((resolve) => {
-              container.modem.demuxStream(updateStream as Duplex, {
-                write: (chunk: Buffer) => {
-                  const data = chunk.toString();
-                  updateOutput += data;
-                  if (options.streamOutput?.stdout) {
-                    options.streamOutput.stdout(data);
-                  }
-                }
-              }, {
-                write: (chunk: Buffer) => {
-                  const data = chunk.toString();
-                  updateOutput += data;
-                  if (options.streamOutput?.stderr) {
-                    options.streamOutput.stderr(data);
-                  }
-                }
-              });
-              updateStream.on('end', resolve);
-            });
-            const updateInfo = await updateExec.inspect();
-            if (updateInfo.ExitCode !== 0) {
-              throw new Error(`Failed to update Alpine package repository: ${updateOutput}`);
-            }
-
-            // Then install the required packages
-            const installCmd = `apk add --no-cache ${options.dependencies.join(' ')}`;
-            const installExec = await container.exec({
-              Cmd: ['sh', '-c', installCmd],
-              AttachStdout: true,
-              AttachStderr: true
-            });
-            let installOutput = '';
-            const installStream = await installExec.start({ hijack: true, stdin: false });
-            await new Promise((resolve) => {
-              container.modem.demuxStream(installStream as Duplex, {
-                write: (chunk: Buffer) => {
-                  const data = chunk.toString();
-                  installOutput += data;
-                  if (options.streamOutput?.stdout) {
-                    options.streamOutput.stdout(data);
-                  }
-                }
-              }, {
-                write: (chunk: Buffer) => {
-                  const data = chunk.toString();
-                  installOutput += data;
-                  if (options.streamOutput?.stderr) {
-                    options.streamOutput.stderr(data);
-                  }
-                }
-              });
-              installStream.on('end', resolve);
-            });
-            const installInfo = await installExec.inspect();
-            if (installInfo.ExitCode !== 0) {
-              throw new Error(`Failed to install Alpine packages: ${options.dependencies.join(', ')}\nOutput: ${installOutput}`);
-            }
-          }
-          command = ['sh', '-c', './code.sh'];
-          break;
-        default:
-          throw new Error(`Unsupported language: ${options.language}`);
+      // If the language defines a dependency installation step, run it first.
+      if (langCfgInline.installDependencies) {
+        await langCfgInline.installDependencies(container, options);
       }
+
+      // Build command using LanguageRegistry (all languages)
+      command = langCfgInline.buildInlineCommand(depsAlreadyInstalled);
     }
 
     return new Promise((resolve, reject) => {
