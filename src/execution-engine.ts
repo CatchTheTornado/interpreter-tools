@@ -52,6 +52,39 @@ export class ExecutionEngine {
     let command: string[];
     let workingDir = '/workspace';
 
+    // Apply per-execution resource limits if specified
+    if (options.cpuLimit || options.memoryLimit) {
+      const updateCfg: any = {};
+
+      // Parse memory strings like '512m', '1g', or number of bytes
+      const parseMem = (val: string): number => {
+        const lower = val.toLowerCase();
+        if (lower.endsWith('g')) return parseInt(lower) * 1024 * 1024 * 1024;
+        if (lower.endsWith('m')) return parseInt(lower) * 1024 * 1024;
+        if (lower.endsWith('k')) return parseInt(lower) * 1024;
+        return parseInt(lower);
+      };
+
+      if (options.memoryLimit) {
+        updateCfg.Memory = parseMem(options.memoryLimit);
+        updateCfg.MemorySwap = -1; // disable swap limit
+      }
+
+      if (options.cpuLimit) {
+        const cpu = parseFloat(options.cpuLimit);
+        if (!isNaN(cpu) && cpu > 0) {
+          updateCfg.CpuPeriod = 100000;
+          updateCfg.CpuQuota = Math.floor(cpu * 100000); // e.g., 0.5 -> 50000
+        }
+      }
+
+      try {
+        await container.update(updateCfg);
+      } catch (err) {
+        console.warn('Failed to update container resource limits:', err);
+      }
+    }
+
     // Determine if dependencies are already installed for this container (JS/TS)
     const depsAlreadyInstalled = this.depsInstalledContainers.has(container.id);
 

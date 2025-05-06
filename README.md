@@ -483,6 +483,21 @@ No changes to `ExecutionEngine` are required.
 }
 ```
 
+### Per-Execution Resource Limits
+
+`ExecutionOptions` let you override CPU and memory **for a single run**:
+
+```typescript
+await engine.executeCode(id, {
+  language: 'python',
+  code: 'print(\"hi\")',
+  cpuLimit: '0.5',       // half a CPU core
+  memoryLimit: '256m'    // 256 MB RAM
+});
+```
+
+Under the hood the engine calls `container.update({ CpuPeriod, CpuQuota, Memory })` just before execution, so the limits apply even when pooling.
+
 ---
 
 ### Streaming Output
@@ -501,7 +516,7 @@ await engine.executeCode(id, {
 
 ---
 
-Happy hacking! ��
+Happy hacking! 
 
 ## License
 
