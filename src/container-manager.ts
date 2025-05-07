@@ -269,8 +269,14 @@ export class ContainerManager {
         return; // exit early
       }
 
-      // Check pool maintenance
-      this.cleanupPool();
+      // Check pool maintenance using the image of this container for new instances
+      try {
+        const inspectInfo = await container.inspect();
+        await this.cleanupPool(inspectInfo.Config.Image);
+      } catch (err) {
+        console.error('Failed to inspect container for pool refill:', err);
+        await this.cleanupPool();
+      }
     } catch (error) {
       console.error('Error cleaning workspace:', error);
       // Remove failed container from pool
@@ -279,7 +285,7 @@ export class ContainerManager {
     }
   }
 
-  private async cleanupPool(): Promise<void> {
+  private async cleanupPool(baseImage?: string): Promise<void> {
     const now = Date.now();
     
     // Remove containers that exceed idle timeout
@@ -300,7 +306,7 @@ export class ContainerManager {
     while (this.pool.length < this.poolConfig.minSize) {
       try {
         const container = await this.createContainer({
-          image: 'node:18-alpine', // Default image, will be changed by execution engine
+          image: baseImage ?? 'node:18-alpine', // Default image, will be changed by execution engine
           mounts: []
         });
         
