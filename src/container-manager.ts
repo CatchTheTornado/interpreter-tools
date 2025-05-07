@@ -4,6 +4,7 @@ import { ContainerConfig, ContainerPoolConfig, ContainerStrategy, MountOptions }
 import * as fs from 'fs';
 import * as path from 'path';
 import AdmZip from 'adm-zip';
+import { BASE_TMP_DIR, tempPathForContainer } from './constants';
 
 interface PooledContainer {
   container: Docker.Container;
@@ -101,10 +102,8 @@ export class ContainerManager {
 
     const containerName = config.name ?? `it_${uuidv4()}`;
 
-    // Ensure base temp directory exists and create folder for container
-    const baseDir = '/tmp/interpreter-tools';
-    fs.mkdirSync(baseDir, { recursive: true });
-    fs.mkdirSync(path.join(baseDir, containerName), { recursive: true });
+    // Create workspace directory for this container
+    fs.mkdirSync(tempPathForContainer(containerName), { recursive: true });
 
     const container = await this.docker.createContainer({
       name: containerName,
@@ -199,6 +198,8 @@ export class ContainerManager {
           // Remove failed container
           try {
             await availableContainer.container.remove({ force: true });
+            const cname = (await availableContainer.container.inspect()).Name.replace('/', '');
+            fs.rmSync(tempPathForContainer(cname), { recursive: true, force: true });
           } catch (err) {
             console.error('Error removing failed container:', err);
           }

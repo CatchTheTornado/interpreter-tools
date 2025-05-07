@@ -6,9 +6,7 @@ import * as path from 'path';
 import Docker from 'dockerode';
 import { Duplex } from 'stream';
 import { LanguageRegistry } from './languages';
-
-const BASE_TMP_DIR = '/tmp/interpreter-tools';
-fs.mkdirSync(BASE_TMP_DIR, { recursive: true });
+import { BASE_TMP_DIR, tempPathForContainer } from './constants';
 
 export class ExecutionEngine {
   private containerManager: ContainerManager;
@@ -238,7 +236,7 @@ EOL`],
 
     if (config.strategy === ContainerStrategy.PER_SESSION) {
       const containerName = `it_${uuidv4()}`;
-      const codeDir = path.join(BASE_TMP_DIR, containerName);
+      const codeDir = tempPathForContainer(containerName);
       fs.mkdirSync(codeDir, { recursive: true });
 
       const container = await this.containerManager.createContainer({
@@ -272,7 +270,7 @@ EOL`],
       switch (config.strategy) {
         case ContainerStrategy.PER_EXECUTION: {
           const containerName = `it_${uuidv4()}`;
-          codePath = path.join(BASE_TMP_DIR, containerName);
+          codePath = tempPathForContainer(containerName);
           await this.prepareCodeFile(options, codePath);
 
           container = await this.containerManager.createContainer({
@@ -301,7 +299,7 @@ EOL`],
             if (!pooledContainer) {
               // No available container, create a fresh one
               const newName = `it_${uuidv4()}`;
-              codePath = path.join(BASE_TMP_DIR, newName);
+              codePath = tempPathForContainer(newName);
               await this.prepareCodeFile(options, codePath);
 
               sessionContainer = await this.containerManager.createContainer({
