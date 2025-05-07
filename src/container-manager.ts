@@ -196,13 +196,7 @@ export class ContainerManager {
         } else {
           console.warn('Workspace cleanup failed, removing container from pool');
           // Remove failed container
-          try {
-            await availableContainer.container.remove({ force: true });
-            const cname = (await availableContainer.container.inspect()).Name.replace('/', '');
-            fs.rmSync(tempPathForContainer(cname), { recursive: true, force: true });
-          } catch (err) {
-            console.error('Error removing failed container:', err);
-          }
+          await this.removeContainerAndDir(availableContainer.container);
           this.pool = this.pool.filter(c => c.container !== availableContainer.container);
           return null;
         }
@@ -272,11 +266,7 @@ export class ContainerManager {
         pooledContainer.lastUsed = Date.now();
       } else {
         console.warn('Workspace cleanup failed in returnContainerToPool, removing container');
-        try {
-          await container.remove({ force: true });
-        } catch (err) {
-          console.error('Failed removing container after cleanup failure:', err);
-        }
+        await this.removeContainerAndDir(container);
         this.pool = this.pool.filter(c => c.container !== container);
         return; // exit early
       }
@@ -293,7 +283,7 @@ export class ContainerManager {
       console.error('Error cleaning workspace:', error);
       // Remove failed container from pool
       this.pool = this.pool.filter(c => c.container !== container);
-      await container.remove({ force: true });
+      await this.removeContainerAndDir(container);
     }
   }
 
@@ -307,7 +297,7 @@ export class ContainerManager {
     
     for (const { container } of containersToRemove) {
       try {
-        await container.remove({ force: true });
+        await this.removeContainerAndDir(container);
         this.pool = this.pool.filter(c => c.container !== container);
       } catch (error) {
         console.error('Error removing idle container:', error);
@@ -336,20 +326,12 @@ export class ContainerManager {
 
   async cleanup(): Promise<void> {
     for (const container of this.containers.values()) {
-      try {
-        await container.remove({ force: true });
-      } catch (error) {
-        console.error('Error removing container:', error);
-      }
+      await this.removeContainerAndDir(container);
     }
     this.containers.clear();
 
     for (const { container } of this.pool) {
-      try {
-        await container.remove({ force: true });
-      } catch (error) {
-        console.error('Error removing pool container:', error);
-      }
+      await this.removeContainerAndDir(container);
     }
     this.pool = [];
 
@@ -369,6 +351,17 @@ export class ContainerManager {
       }
     } catch (err) {
       console.error('Error during final it_ container sweep:', err);
+    }
+  }
+
+  private async removeContainerAndDir(container: Docker.Container): Promise<void> {
+    try {
+      const info = await container.inspect();
+      await container.remove({ force: true });
+      const cname = info.Name.replace('/', '');
+      fs.rmSync(tempPathForContainer(cname), { recursive: true, force: true });
+    } catch (err) {
+      console.error('Error removing container and dir:', err);
     }
   }
 } 
