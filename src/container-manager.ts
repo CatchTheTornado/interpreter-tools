@@ -99,7 +99,10 @@ export class ContainerManager {
       throw error;
     }
 
+    const containerName = `it_${uuidv4()}`;
+
     const container = await this.docker.createContainer({
+      name: containerName,
       Image: config.image,
       Tty: true,
       HostConfig: {
@@ -120,6 +123,9 @@ export class ContainerManager {
     });
 
     await container.start();
+
+    // Track created container
+    this.containers.set(container.id, container);
     return container;
   }
 
@@ -340,5 +346,23 @@ export class ContainerManager {
       }
     }
     this.pool = [];
+
+    // Final sweep: remove any stopped containers left with the it_ prefix
+    try {
+      const all = await this.docker.listContainers({ all: true });
+      for (const info of all) {
+        const hasPrefix = info.Names?.some(n => /\/it_/i.test(n));
+        const isRunning = info.State === 'running' || info.State === 'restarting';
+        if (hasPrefix && !isRunning) {
+          try {
+            await this.docker.getContainer(info.Id).remove({ force: true });
+          } catch (err) {
+            console.error('Error removing leftover it_ container:', err);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error during final it_ container sweep:', err);
+    }
   }
 } 
