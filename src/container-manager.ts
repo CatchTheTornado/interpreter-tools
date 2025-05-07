@@ -334,7 +334,7 @@ export class ContainerManager {
   async cleanup(forceStopAllContainers: boolean = true): Promise<void> {
     for (const container of this.containers.values()) {
       try {
-        if (forceStopAllContainers) container.stop()
+        if (forceStopAllContainers) await container.stop();
       } catch (err) {
         console.error('Error stopping container:', err);
       }
