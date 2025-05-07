@@ -28,6 +28,7 @@ export interface ContainerConfig {
   image: string;
   mounts?: MountOptions[];
   environment?: Record<string, string>;
+  name?: string;
 }
 
 export interface ExecutionResult {
@@ -35,6 +36,7 @@ export interface ExecutionResult {
   stderr: string;
   exitCode: number;
   executionTime: number;
+  workspaceDir: string;
 }
 
 export interface ContainerPoolConfig {

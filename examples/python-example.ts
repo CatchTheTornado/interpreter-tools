@@ -4,9 +4,10 @@ import * as path from 'path';
 async function main() {
   const engine = new ExecutionEngine();
 
+  let sessionId: string | undefined = ''
   try {
     // Create a session with per-session strategy
-    const sessionId = await engine.createSession({
+    sessionId = await engine.createSession({
       strategy: ContainerStrategy.PER_SESSION,
       containerConfig: {
         image: 'python:3.9-slim',
@@ -45,11 +46,14 @@ for file in data_dir.glob('*.json'):
     console.log('STDERR:', result.stderr);
     console.log('Exit Code:', result.exitCode);
     console.log('Execution Time:', result.executionTime, 'ms');
+    console.log('Container Workspace folder:', result.workspaceDir);
 
   } catch (error) {
     console.error('Error:', error);
   } finally {
-    await engine.cleanup();
+    if (sessionId) {
+      await engine.cleanupSession(sessionId);
+    }
   }
 }
 

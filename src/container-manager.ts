@@ -4,6 +4,7 @@ import { ContainerConfig, ContainerPoolConfig, ContainerStrategy, MountOptions }
 import * as fs from 'fs';
 import * as path from 'path';
 import AdmZip from 'adm-zip';
+import { BASE_TMP_DIR, tempPathForContainer } from './constants';
 
 interface PooledContainer {
   container: Docker.Container;
@@ -99,7 +100,20 @@ export class ContainerManager {
       throw error;
     }
 
+    const containerName = config.name ?? `it_${uuidv4()}`;
+
+    // Create workspace directory for this container
+    const workspaceDir = tempPathForContainer(containerName);
+    fs.mkdirSync(workspaceDir, { recursive: true });
+
+    // Ensure mounts include workspace
+    const mountsWithWorkspace = (config.mounts && config.mounts.length > 0) ? [...config.mounts] : [];
+    if (!mountsWithWorkspace.some(m => m.target === '/workspace')) {
+      mountsWithWorkspace.push({ type: 'directory', source: workspaceDir, target: '/workspace' });
+    }
+
     const container = await this.docker.createContainer({
+      name: containerName,
       Image: config.image,
       Tty: true,
       HostConfig: {
@@ -108,18 +122,21 @@ export class ContainerManager {
         CpuPeriod: 100000,
         CpuQuota: 50000,
         NetworkMode: 'bridge',
-        Mounts: config.mounts?.map(mount => ({
+        Mounts: mountsWithWorkspace.map(mount => ({
           Target: mount.target,
           Source: mount.source,
           Type: 'bind',
           ReadOnly: false
-        })) || []
+        }))
       },
       WorkingDir: '/workspace',
       Cmd: ['sh', '-c', 'mkdir -p /workspace && tail -f /dev/null']
     });
 
     await container.start();
+
+    // Track created container
+    this.containers.set(container.id, container);
     return container;
   }
 
@@ -186,11 +203,7 @@ export class ContainerManager {
         } else {
           console.warn('Workspace cleanup failed, removing container from pool');
           // Remove failed container
-          try {
-            await availableContainer.container.remove({ force: true });
-          } catch (err) {
-            console.error('Error removing failed container:', err);
-          }
+          await this.removeContainerAndDir(availableContainer.container);
           this.pool = this.pool.filter(c => c.container !== availableContainer.container);
           return null;
         }
@@ -260,26 +273,28 @@ export class ContainerManager {
         pooledContainer.lastUsed = Date.now();
       } else {
         console.warn('Workspace cleanup failed in returnContainerToPool, removing container');
-        try {
-          await container.remove({ force: true });
-        } catch (err) {
-          console.error('Failed removing container after cleanup failure:', err);
-        }
+        await this.removeContainerAndDir(container);
         this.pool = this.pool.filter(c => c.container !== container);
         return; // exit early
       }
 
-      // Check pool maintenance
-      this.cleanupPool();
+      // Check pool maintenance using the image of this container for new instances
+      try {
+        const inspectInfo = await container.inspect();
+        await this.cleanupPool(inspectInfo.Config.Image);
+      } catch (err) {
+        console.error('Failed to inspect container for pool refill:', err);
+        await this.cleanupPool();
+      }
     } catch (error) {
       console.error('Error cleaning workspace:', error);
       // Remove failed container from pool
       this.pool = this.pool.filter(c => c.container !== container);
-      await container.remove({ force: true });
+      await this.removeContainerAndDir(container);
     }
   }
 
-  private async cleanupPool(): Promise<void> {
+  private async cleanupPool(baseImage?: string): Promise<void> {
     const now = Date.now();
     
     // Remove containers that exceed idle timeout
@@ -289,7 +304,7 @@ export class ContainerManager {
     
     for (const { container } of containersToRemove) {
       try {
-        await container.remove({ force: true });
+        await this.removeContainerAndDir(container);
         this.pool = this.pool.filter(c => c.container !== container);
       } catch (error) {
         console.error('Error removing idle container:', error);
@@ -300,7 +315,7 @@ export class ContainerManager {
     while (this.pool.length < this.poolConfig.minSize) {
       try {
         const container = await this.createContainer({
-          image: 'node:18-alpine', // Default image, will be changed by execution engine
+          image: baseImage ?? 'node:18-alpine', // Default image, will be changed by execution engine
           mounts: []
         });
         
@@ -316,23 +331,63 @@ export class ContainerManager {
     }
   }
 
-  async cleanup(): Promise<void> {
+  async cleanup(forceStopAllContainers: boolean = true): Promise<void> {
     for (const container of this.containers.values()) {
       try {
-        await container.remove({ force: true });
-      } catch (error) {
-        console.error('Error removing container:', error);
+        if (forceStopAllContainers) await container.stop();
+      } catch (err) {
+        console.error('Error stopping container:', err);
       }
+      await this.removeContainerAndDir(container);
     }
     this.containers.clear();
 
     for (const { container } of this.pool) {
       try {
-        await container.remove({ force: true });
-      } catch (error) {
-        console.error('Error removing pool container:', error);
-      }
+        if (forceStopAllContainers) container.stop()
+      } catch (err) {
+        console.error('Error stopping container:', err);
+      }      
+      await this.removeContainerAndDir(container);
     }
     this.pool = [];
+
+    // Final sweep: remove any stopped containers left with the it_ prefix
+    try {
+      const all = await this.docker.listContainers({ all: true });
+      for (const info of all) {
+        const hasPrefix = info.Names?.some(n => /\/it_/i.test(n));
+        const isRunning = info.State === 'running' || info.State === 'restarting';
+        if (hasPrefix && (!isRunning || forceStopAllContainers)) {
+          try {
+            const leftoverContainer = this.docker.getContainer(info.Id);
+            await leftoverContainer.remove({ force: true });
+            const cname = (info.Names && info.Names[0]) ? info.Names[0].replace('/', '') : undefined;
+            if (cname) {
+              fs.rmSync(tempPathForContainer(cname), { recursive: true, force: true });
+            }
+          } catch (err) {
+            console.error('Error removing leftover it_ container:', err);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error during final it_ container sweep:', err);
+    }
+  }
+
+  async removeContainerAndDir(container: Docker.Container): Promise<void> {
+    try {
+      const info = await container.inspect();
+      await container.remove({ force: true });
+      const cname = info.Name.replace('/', '');
+      fs.rmSync(tempPathForContainer(cname), { recursive: true, force: true });
+
+      // Remove from tracking structures if present
+      this.containers.delete(container.id);
+      this.pool = this.pool.filter(c => c.container !== container);
+    } catch (err) {
+      console.error('Error removing container and dir:', err);
+    }
   }
 } 

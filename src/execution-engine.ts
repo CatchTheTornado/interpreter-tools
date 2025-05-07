@@ -6,7 +6,7 @@ import * as path from 'path';
 import Docker from 'dockerode';
 import { Duplex } from 'stream';
 import { LanguageRegistry } from './languages';
-
+import { BASE_TMP_DIR, tempPathForContainer } from './constants';
 
 export class ExecutionEngine {
   private containerManager: ContainerManager;
@@ -23,8 +23,7 @@ export class ExecutionEngine {
     this.depsInstalledContainers = new Set();
   }
 
-  private async prepareCodeFile(options: ExecutionOptions): Promise<string> {
-    const tempDir = path.join('/tmp', uuidv4());
+  private async prepareCodeFile(options: ExecutionOptions, tempDir: string): Promise<void> {
     fs.mkdirSync(tempDir, { recursive: true });
 
     const langCfg = LanguageRegistry.get(options.language);
@@ -33,7 +32,6 @@ export class ExecutionEngine {
     }
 
     langCfg.prepareFiles(options, tempDir);
-    return tempDir;
   }
 
   private getContainerImage(language: string): string {
@@ -214,14 +212,15 @@ EOL`],
             try {
               const info = await exec.inspect();
               // Mark container as having dependencies installed for future runs
-              if (!depsAlreadyInstalled && (options.language === 'javascript' || options.language === 'typescript' || options.language === 'python')) {
+              if (!depsAlreadyInstalled) {
                 this.depsInstalledContainers.add(container.id);
               }
               resolve({
                 stdout,
                 stderr,
                 exitCode: info.ExitCode || 1,
-                executionTime: Date.now() - startTime
+                executionTime: Date.now() - startTime,
+                workspaceDir: codePath
               });
             } catch (error) {
               reject(error);
@@ -237,7 +236,22 @@ EOL`],
     this.sessionConfigs.set(sessionId, config);
 
     if (config.strategy === ContainerStrategy.PER_SESSION) {
-      const container = await this.containerManager.createContainer(config.containerConfig);
+      const containerName = `it_${uuidv4()}`;
+      const codeDir = tempPathForContainer(containerName);
+      fs.mkdirSync(codeDir, { recursive: true });
+
+      const container = await this.containerManager.createContainer({
+        ...config.containerConfig,
+        name: containerName,
+        mounts: [
+          ...(config.containerConfig.mounts || []),
+          {
+            type: 'directory',
+            source: codeDir,
+            target: '/workspace'
+          }
+        ]
+      });
       this.sessionContainers.set(sessionId, container);
     }
 
@@ -250,26 +264,32 @@ EOL`],
       throw new Error('Invalid session ID');
     }
 
-    const codePath = await this.prepareCodeFile(options);
+    let codePath: string = '';
     let container: Docker.Container;
 
     try {
       switch (config.strategy) {
-        case ContainerStrategy.PER_EXECUTION:
+        case ContainerStrategy.PER_EXECUTION: {
+          const containerName = `it_${uuidv4()}`;
+          codePath = tempPathForContainer(containerName);
+          await this.prepareCodeFile(options, codePath);
+
           container = await this.containerManager.createContainer({
             ...config.containerConfig,
+            name: containerName,
             image: config.containerConfig.image ? config.containerConfig.image : this.getContainerImage(options.language),
             mounts: [
               ...(config.containerConfig.mounts || []),
               {
                 type: 'directory',
-                source: codePath,
+                source: codePath!,
                 target: '/workspace'
               }
             ]
           });
           this.containerToSession.set(container.id, sessionId);
           break;
+        }
 
         case ContainerStrategy.POOL: {
           // Check if a container is already assigned to this session
@@ -279,14 +299,19 @@ EOL`],
             const pooledContainer = await this.containerManager.getContainerFromPool(expectedImage);
             if (!pooledContainer) {
               // No available container, create a fresh one
+              const newName = `it_${uuidv4()}`;
+              codePath = tempPathForContainer(newName);
+              await this.prepareCodeFile(options, codePath);
+
               sessionContainer = await this.containerManager.createContainer({
                 ...config.containerConfig,
+                name: newName,
                 image: expectedImage,
                 mounts: [
                   ...(config.containerConfig.mounts || []),
                   {
                     type: 'directory',
-                    source: codePath,
+                    source: codePath!,
                     target: '/workspace'
                   }
                 ]
@@ -306,6 +331,7 @@ EOL`],
           if (!sessionContainer) {
             throw new Error('Session container not found');
           }
+          
           container = sessionContainer;
           break;
         }
@@ -314,19 +340,24 @@ EOL`],
           throw new Error(`Unsupported container strategy: ${config.strategy}`);
       }
 
+      // If codePath still empty (reused container), infer from container name
+      if (!codePath) {
+        const info = await container.inspect();
+        codePath = tempPathForContainer(info.Name.replace('/', ''));
+      }
+
       const result = await this.executeInContainer(container, options, config, codePath);
 
       if (config.strategy === ContainerStrategy.POOL) {
         // Do nothing here; container remains assigned for session lifetime.
       } else if (config.strategy === ContainerStrategy.PER_EXECUTION) {
-        await container.remove({ force: true });
+        await this.containerManager.removeContainerAndDir(container);
         this.containerToSession.delete(container.id);
       }
 
       return result;
     } finally {
-      // Cleanup temporary files
-      fs.rmSync(codePath, { recursive: true, force: true });
+      /* workspace retained for inspection; cleaned during container removal */
     }
   }
 
@@ -339,7 +370,7 @@ EOL`],
         // Return container to pool after cleaning up workspace via ContainerManager
         await this.containerManager.returnContainerToPool(container);
       } else {
-        await container.remove({ force: true });
+        await this.containerManager.removeContainerAndDir(container);
       }
       this.sessionContainers.delete(sessionId);
       this.containerToSession.delete(container.id);
