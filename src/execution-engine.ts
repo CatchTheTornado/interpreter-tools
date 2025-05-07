@@ -331,12 +331,19 @@ EOL`],
           if (!sessionContainer) {
             throw new Error('Session container not found');
           }
+          
           container = sessionContainer;
           break;
         }
 
         default:
           throw new Error(`Unsupported container strategy: ${config.strategy}`);
+      }
+
+      // If codePath still empty (reused container), infer from container name
+      if (!codePath) {
+        const info = await container.inspect();
+        codePath = tempPathForContainer(info.Name.replace('/', ''));
       }
 
       const result = await this.executeInContainer(container, options, config, codePath);

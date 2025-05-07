@@ -324,13 +324,23 @@ export class ContainerManager {
     }
   }
 
-  async cleanup(): Promise<void> {
+  async cleanup(forceStopAllContainers: boolean = true): Promise<void> {
     for (const container of this.containers.values()) {
+      try {
+        if (forceStopAllContainers) container.stop()
+      } catch (err) {
+        console.error('Error stopping container:', err);
+      }
       await this.removeContainerAndDir(container);
     }
     this.containers.clear();
 
     for (const { container } of this.pool) {
+      try {
+        if (forceStopAllContainers) container.stop()
+      } catch (err) {
+        console.error('Error stopping container:', err);
+      }      
       await this.removeContainerAndDir(container);
     }
     this.pool = [];
@@ -341,7 +351,7 @@ export class ContainerManager {
       for (const info of all) {
         const hasPrefix = info.Names?.some(n => /\/it_/i.test(n));
         const isRunning = info.State === 'running' || info.State === 'restarting';
-        if (hasPrefix && !isRunning) {
+        if (hasPrefix && (!isRunning || forceStopAllContainers)) {
           try {
             const leftoverContainer = this.docker.getContainer(info.Id);
             await leftoverContainer.remove({ force: true });
