@@ -230,7 +230,7 @@ To set up the project for local development:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/interpreter-tools.git
+git clone https://github.com/CatchTheTornado/interpreter-tools.git
 cd interpreter-tools
 
 # Install dependencies
