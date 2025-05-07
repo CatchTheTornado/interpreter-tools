@@ -35,6 +35,7 @@ console.log('Average:', average);
     console.log('STDERR:', result.stderr);
     console.log('Exit Code:', result.exitCode);
     console.log('Execution Time:', result.executionTime, 'ms');
+    console.log('Container Workspace folder:', result.workspaceDir);
 
   } catch (error) {
     console.error('Error:', error);

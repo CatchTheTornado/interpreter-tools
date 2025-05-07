@@ -343,7 +343,12 @@ export class ContainerManager {
         const isRunning = info.State === 'running' || info.State === 'restarting';
         if (hasPrefix && !isRunning) {
           try {
-            await this.docker.getContainer(info.Id).remove({ force: true });
+            const leftoverContainer = this.docker.getContainer(info.Id);
+            await leftoverContainer.remove({ force: true });
+            const cname = (info.Names && info.Names[0]) ? info.Names[0].replace('/', '') : undefined;
+            if (cname) {
+              fs.rmSync(tempPathForContainer(cname), { recursive: true, force: true });
+            }
           } catch (err) {
             console.error('Error removing leftover it_ container:', err);
           }
@@ -354,12 +359,16 @@ export class ContainerManager {
     }
   }
 
-  private async removeContainerAndDir(container: Docker.Container): Promise<void> {
+  async removeContainerAndDir(container: Docker.Container): Promise<void> {
     try {
       const info = await container.inspect();
       await container.remove({ force: true });
       const cname = info.Name.replace('/', '');
       fs.rmSync(tempPathForContainer(cname), { recursive: true, force: true });
+
+      // Remove from tracking structures if present
+      this.containers.delete(container.id);
+      this.pool = this.pool.filter(c => c.container !== container);
     } catch (err) {
       console.error('Error removing container and dir:', err);
     }

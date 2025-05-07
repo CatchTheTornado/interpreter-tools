@@ -36,6 +36,7 @@ export interface ExecutionResult {
   stderr: string;
   exitCode: number;
   executionTime: number;
+  workspaceDir: string;
 }
 
 export interface ContainerPoolConfig {

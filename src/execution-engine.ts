@@ -212,14 +212,15 @@ EOL`],
             try {
               const info = await exec.inspect();
               // Mark container as having dependencies installed for future runs
-              if (!depsAlreadyInstalled && (options.language === 'javascript' || options.language === 'typescript' || options.language === 'python')) {
+              if (!depsAlreadyInstalled) {
                 this.depsInstalledContainers.add(container.id);
               }
               resolve({
                 stdout,
                 stderr,
                 exitCode: info.ExitCode || 1,
-                executionTime: Date.now() - startTime
+                executionTime: Date.now() - startTime,
+                workspaceDir: codePath
               });
             } catch (error) {
               reject(error);
@@ -343,16 +344,13 @@ EOL`],
       if (config.strategy === ContainerStrategy.POOL) {
         // Do nothing here; container remains assigned for session lifetime.
       } else if (config.strategy === ContainerStrategy.PER_EXECUTION) {
-        await container.remove({ force: true });
+        await this.containerManager.removeContainerAndDir(container);
         this.containerToSession.delete(container.id);
       }
 
       return result;
     } finally {
-      // Cleanup temporary files
-      if (codePath && codePath.length) {
-        fs.rmSync(codePath, { recursive: true, force: true });
-      }
+      /* workspace retained for inspection; cleaned during container removal */
     }
   }
 
@@ -365,7 +363,7 @@ EOL`],
         // Return container to pool after cleaning up workspace via ContainerManager
         await this.containerManager.returnContainerToPool(container);
       } else {
-        await container.remove({ force: true });
+        await this.containerManager.removeContainerAndDir(container);
       }
       this.sessionContainers.delete(sessionId);
       this.containerToSession.delete(container.id);
