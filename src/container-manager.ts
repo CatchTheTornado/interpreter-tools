@@ -103,7 +103,14 @@ export class ContainerManager {
     const containerName = config.name ?? `it_${uuidv4()}`;
 
     // Create workspace directory for this container
-    fs.mkdirSync(tempPathForContainer(containerName), { recursive: true });
+    const workspaceDir = tempPathForContainer(containerName);
+    fs.mkdirSync(workspaceDir, { recursive: true });
+
+    // Ensure mounts include workspace
+    const mountsWithWorkspace = (config.mounts && config.mounts.length > 0) ? [...config.mounts] : [];
+    if (!mountsWithWorkspace.some(m => m.target === '/workspace')) {
+      mountsWithWorkspace.push({ type: 'directory', source: workspaceDir, target: '/workspace' });
+    }
 
     const container = await this.docker.createContainer({
       name: containerName,
@@ -115,12 +122,12 @@ export class ContainerManager {
         CpuPeriod: 100000,
         CpuQuota: 50000,
         NetworkMode: 'bridge',
-        Mounts: config.mounts?.map(mount => ({
+        Mounts: mountsWithWorkspace.map(mount => ({
           Target: mount.target,
           Source: mount.source,
           Type: 'bind',
           ReadOnly: false
-        })) || []
+        }))
       },
       WorkingDir: '/workspace',
       Cmd: ['sh', '-c', 'mkdir -p /workspace && tail -f /dev/null']
