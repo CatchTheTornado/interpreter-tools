@@ -99,7 +99,12 @@ export class ContainerManager {
       throw error;
     }
 
-    const containerName = `it_${uuidv4()}`;
+    const containerName = config.name ?? `it_${uuidv4()}`;
+
+    // Ensure base temp directory exists and create folder for container
+    const baseDir = '/tmp/interpreter-tools';
+    fs.mkdirSync(baseDir, { recursive: true });
+    fs.mkdirSync(path.join(baseDir, containerName), { recursive: true });
 
     const container = await this.docker.createContainer({
       name: containerName,

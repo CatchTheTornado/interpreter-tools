@@ -7,6 +7,8 @@ import Docker from 'dockerode';
 import { Duplex } from 'stream';
 import { LanguageRegistry } from './languages';
 
+const BASE_TMP_DIR = '/tmp/interpreter-tools';
+fs.mkdirSync(BASE_TMP_DIR, { recursive: true });
 
 export class ExecutionEngine {
   private containerManager: ContainerManager;
@@ -23,8 +25,7 @@ export class ExecutionEngine {
     this.depsInstalledContainers = new Set();
   }
 
-  private async prepareCodeFile(options: ExecutionOptions): Promise<string> {
-    const tempDir = path.join('/tmp', uuidv4());
+  private async prepareCodeFile(options: ExecutionOptions, tempDir: string): Promise<void> {
     fs.mkdirSync(tempDir, { recursive: true });
 
     const langCfg = LanguageRegistry.get(options.language);
@@ -33,7 +34,6 @@ export class ExecutionEngine {
     }
 
     langCfg.prepareFiles(options, tempDir);
-    return tempDir;
   }
 
   private getContainerImage(language: string): string {
@@ -237,7 +237,22 @@ EOL`],
     this.sessionConfigs.set(sessionId, config);
 
     if (config.strategy === ContainerStrategy.PER_SESSION) {
-      const container = await this.containerManager.createContainer(config.containerConfig);
+      const containerName = `it_${uuidv4()}`;
+      const codeDir = path.join(BASE_TMP_DIR, containerName);
+      fs.mkdirSync(codeDir, { recursive: true });
+
+      const container = await this.containerManager.createContainer({
+        ...config.containerConfig,
+        name: containerName,
+        mounts: [
+          ...(config.containerConfig.mounts || []),
+          {
+            type: 'directory',
+            source: codeDir,
+            target: '/workspace'
+          }
+        ]
+      });
       this.sessionContainers.set(sessionId, container);
     }
 
@@ -250,26 +265,32 @@ EOL`],
       throw new Error('Invalid session ID');
     }
 
-    const codePath = await this.prepareCodeFile(options);
+    let codePath: string = '';
     let container: Docker.Container;
 
     try {
       switch (config.strategy) {
-        case ContainerStrategy.PER_EXECUTION:
+        case ContainerStrategy.PER_EXECUTION: {
+          const containerName = `it_${uuidv4()}`;
+          codePath = path.join(BASE_TMP_DIR, containerName);
+          await this.prepareCodeFile(options, codePath);
+
           container = await this.containerManager.createContainer({
             ...config.containerConfig,
+            name: containerName,
             image: config.containerConfig.image ? config.containerConfig.image : this.getContainerImage(options.language),
             mounts: [
               ...(config.containerConfig.mounts || []),
               {
                 type: 'directory',
-                source: codePath,
+                source: codePath!,
                 target: '/workspace'
               }
             ]
           });
           this.containerToSession.set(container.id, sessionId);
           break;
+        }
 
         case ContainerStrategy.POOL: {
           // Check if a container is already assigned to this session
@@ -279,14 +300,19 @@ EOL`],
             const pooledContainer = await this.containerManager.getContainerFromPool(expectedImage);
             if (!pooledContainer) {
               // No available container, create a fresh one
+              const newName = `it_${uuidv4()}`;
+              codePath = path.join(BASE_TMP_DIR, newName);
+              await this.prepareCodeFile(options, codePath);
+
               sessionContainer = await this.containerManager.createContainer({
                 ...config.containerConfig,
+                name: newName,
                 image: expectedImage,
                 mounts: [
                   ...(config.containerConfig.mounts || []),
                   {
                     type: 'directory',
-                    source: codePath,
+                    source: codePath!,
                     target: '/workspace'
                   }
                 ]
@@ -326,7 +352,9 @@ EOL`],
       return result;
     } finally {
       // Cleanup temporary files
-      fs.rmSync(codePath, { recursive: true, force: true });
+      if (codePath && codePath.length) {
+        fs.rmSync(codePath, { recursive: true, force: true });
+      }
     }
   }
 

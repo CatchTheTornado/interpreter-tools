@@ -28,6 +28,7 @@ export interface ContainerConfig {
   image: string;
   mounts?: MountOptions[];
   environment?: Record<string, string>;
+  name?: string;
 }
 
 export interface ExecutionResult {
