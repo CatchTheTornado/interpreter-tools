@@ -313,6 +313,7 @@ EOL`],
               }
             ]
           });
+          this.sessionContainers.set(sessionId, container);
           this.containerToSession.set(container.id, sessionId);
           break;
         }
@@ -379,6 +380,7 @@ EOL`],
       } else if (config.strategy === ContainerStrategy.PER_EXECUTION) {
         await this.containerManager.removeContainerAndDir(container);
         this.containerToSession.delete(container.id);
+        this.sessionContainers.delete(sessionId);
       }
 
       return result;

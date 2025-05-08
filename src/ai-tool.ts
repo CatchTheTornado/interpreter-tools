@@ -95,7 +95,7 @@ export function createCodeExecutionTool(config: CodeExecutionToolConfig = {}) {
 }
 
 // Default instance with no mounts
-export const codeExecutionTool = createCodeExecutionTool();
+export const { codeExecutionTool, executionEngine, cleanup } = createCodeExecutionTool();
 
 function getImageForLanguage(language: string): string {
   const cfg = LanguageRegistry.get(language);
