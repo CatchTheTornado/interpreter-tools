@@ -15,6 +15,7 @@ export class ExecutionEngine {
   private containerToSession: Map<string, string>;
   private depsInstalledContainers: Set<string>;
   private containerFileBaselines: Map<string, Set<string>>;
+  private containerWorkspaces: Map<string, string>;
   private verbosity: 'info' | 'debug';
 
   constructor() {
@@ -24,6 +25,7 @@ export class ExecutionEngine {
     this.containerToSession = new Map();
     this.depsInstalledContainers = new Set();
     this.containerFileBaselines = new Map();
+    this.containerWorkspaces = new Map();
     this.verbosity = 'info';
   }
 
@@ -186,8 +188,8 @@ EOL`],
 
     this.logDebug('Executing command:', command.join(' '));
 
-    // Save baseline for generated file tracking
-    this.containerFileBaselines.set(container.id, new Set(this.listAllFiles(codePath)));
+    // Save baseline for generated file tracking (only workspace files)
+    this.containerFileBaselines.set(container.id, new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath))));
 
     return new Promise((resolve, reject) => {
       container.exec({
@@ -254,8 +256,8 @@ EOL`],
                 generatedFiles
               };
 
-              // Save baseline for generated file tracking
-              this.containerFileBaselines.set(container.id, new Set(this.listAllFiles(result.workspaceDir)));
+              // Save baseline for generated file tracking (only workspace files)
+              this.containerFileBaselines.set(container.id, new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath))));
               this.logDebug(result);
               resolve(result);
             } catch (error) {
@@ -301,6 +303,8 @@ EOL`],
         ]
       });
       this.sessionContainers.set(sessionId, container);
+      this.containerWorkspaces.set(container.id, codeDir);
+      this.containerToSession.set(container.id, sessionId);
     }
 
     return sessionId;
@@ -337,6 +341,7 @@ EOL`],
             ]
           });
           this.sessionContainers.set(sessionId, container);
+          this.containerWorkspaces.set(container.id, codePath);
           this.containerToSession.set(container.id, sessionId);
           break;
         }
@@ -371,6 +376,9 @@ EOL`],
               sessionContainer = pooledContainer;
             }
             this.sessionContainers.set(sessionId, sessionContainer);
+            if (codePath.length) {
+              this.containerWorkspaces.set(sessionContainer.id, codePath);
+            }
             this.containerToSession.set(sessionContainer.id, sessionId);
           }
           container = sessionContainer;
@@ -438,8 +446,12 @@ EOL`],
     this.containerToSession.clear();
   }
 
-  private getWorkspaceDir(container: Docker.Container): string {
-    return tempPathForContainer(container.id.startsWith('it_') ? container.id : (container as any).name ?? '');
+  private  getWorkspaceDir(container: Docker.Container): string {
+    const cached = this.containerWorkspaces.get(container.id);
+    if (cached) return cached;
+    const cnameRaw = (container as any).name ?? '';
+    const cname = cnameRaw.startsWith('/') ? cnameRaw.slice(1) : cnameRaw;
+    return tempPathForContainer(cname);
   }
 
   private listAllFiles(dir: string): string[] {
@@ -466,7 +478,7 @@ EOL`],
     if (!onlyGenerated) return currentFiles;
 
     const baseline = this.containerFileBaselines.get(container.id) ?? new Set<string>();
-    return currentFiles.filter(p => !baseline.has(p));
+    return currentFiles.filter(p => p.startsWith(workspaceDir) && !baseline.has(p));
   }
 
   async addFileFromBase64(sessionId: string, relativePath: string, dataBase64: string): Promise<void> {
