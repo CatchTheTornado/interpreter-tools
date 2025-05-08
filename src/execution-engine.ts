@@ -15,6 +15,7 @@ export class ExecutionEngine {
   private containerToSession: Map<string, string>;
   private depsInstalledContainers: Set<string>;
   private containerFileBaselines: Map<string, Set<string>>;
+  private verbosity: 'info' | 'debug';
 
   constructor() {
     this.containerManager = new ContainerManager();
@@ -23,15 +24,30 @@ export class ExecutionEngine {
     this.containerToSession = new Map();
     this.depsInstalledContainers = new Set();
     this.containerFileBaselines = new Map();
+    this.verbosity = 'info';
+  }
+
+  setVerbosity(level: 'info' | 'debug') {
+    this.verbosity = level;
+  }
+
+  private logDebug(...args: any[]) {
+    if (this.verbosity === 'debug') {
+      console.log('[ExecutionEngine]', ...args);
+    }
   }
 
   private async prepareCodeFile(options: ExecutionOptions, tempDir: string): Promise<void> {
     fs.mkdirSync(tempDir, { recursive: true });
 
+    this.logDebug('Preparing code files in', tempDir);
+
     const langCfg = LanguageRegistry.get(options.language);
     if (!langCfg) {
       throw new Error(`Unsupported language: ${options.language}`);
     }
+
+    this.logDebug('Source code:\n', options.code);
 
     langCfg.prepareFiles(options, tempDir);
   }
@@ -168,9 +184,10 @@ EOL`],
       command = langCfgInline.buildInlineCommand(depsAlreadyInstalled);
     }
 
-                  // Save baseline for generated file tracking
-    this.containerFileBaselines.set(container.id, new Set(this.listAllFiles(codePath)));
+    this.logDebug('Executing command:', command.join(' '));
 
+    // Save baseline for generated file tracking
+    this.containerFileBaselines.set(container.id, new Set(this.listAllFiles(codePath)));
 
     return new Promise((resolve, reject) => {
       container.exec({
@@ -256,13 +273,17 @@ EOL`],
       if (config.enforceNewSession) {
         throw new Error(`Session ID ${sessionId} already exists`);
       }
+      this.logDebug('Reusing existing session', sessionId);
       return sessionId; // reuse existing session
     }
+
+    this.logDebug('Creating session', sessionId, 'strategy', config.strategy);
 
     this.sessionConfigs.set(sessionId, config);
 
     if (config.strategy === ContainerStrategy.PER_SESSION) {
       const containerName = `it_${uuidv4()}`;
+      this.logDebug('Creating container', containerName);
       const codeDir = tempPathForContainer(containerName);
       fs.mkdirSync(codeDir, { recursive: true });
 
@@ -297,6 +318,7 @@ EOL`],
       switch (config.strategy) {
         case ContainerStrategy.PER_EXECUTION: {
           const containerName = `it_${uuidv4()}`;
+          this.logDebug('Creating container', containerName);
           codePath = tempPathForContainer(containerName);
           await this.prepareCodeFile(options, codePath);
 
@@ -327,6 +349,7 @@ EOL`],
             if (!pooledContainer) {
               // No available container, create a fresh one
               const newName = `it_${uuidv4()}`;
+              this.logDebug('Creating container', newName);
               codePath = tempPathForContainer(newName);
               await this.prepareCodeFile(options, codePath);
 
