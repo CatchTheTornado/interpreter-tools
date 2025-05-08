@@ -466,8 +466,11 @@ EOL`],
         let deleteDir = true;
         if (keepGeneratedFiles) {
           try {
-            const generated = await this.listWorkspaceFiles(sessionId, true);
-            if (generated.length > 0) {
+            const generatedArr = await this.listWorkspaceFiles(sessionId, true);
+            if (generatedArr.length > 0) {
+              // Keep directory, just remove non-generated files
+              const keepSet = new Set<string>(generatedArr);
+              this.cleanWorkspaceKeepGenerated(container, keepSet);
               deleteDir = false;
             }
           } catch {}
@@ -515,6 +518,31 @@ EOL`],
       }
     }
     return results;
+  }
+
+  /**
+   * Remove all files in the workspace except those present in generatedFiles set.
+   */
+  private cleanWorkspaceKeepGenerated(container: Docker.Container, generatedFiles: Set<string>): void {
+    const workspaceDir = this.getWorkspaceDir(container);
+    const all = this.listAllFiles(workspaceDir);
+    for (const file of all) {
+      if (!generatedFiles.has(file)) {
+        try {
+          fs.rmSync(file, { force: true });
+        } catch {}
+      }
+    }
+    // Remove empty dirs (bottom-up)
+    const dirs = all.map(p => path.dirname(p)).sort((a, b) => b.length - a.length);
+    for (const dir of dirs) {
+      if (dir === workspaceDir) continue;
+      try {
+        if (fs.existsSync(dir) && fs.readdirSync(dir).length === 0) {
+          fs.rmdirSync(dir, { recursive: false });
+        }
+      } catch {}
+    }
   }
 
   // Public helpers
