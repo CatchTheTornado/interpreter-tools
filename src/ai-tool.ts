@@ -87,9 +87,9 @@ export function createCodeExecutionTool(config: CodeExecutionToolConfig = {}) {
     }
   };
 
-  async function cleanup(): Promise<void> {
+  async function cleanup(keepGeneratedFiles: boolean = false): Promise<void> {
     try {
-      await engine.cleanup();
+      await engine.cleanup(keepGeneratedFiles);
     } catch {}
   }
 

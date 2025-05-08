@@ -453,7 +453,7 @@ EOL`],
     }
   }
 
-  async cleanupSession(sessionId: string): Promise<void> {
+  async cleanupSession(sessionId: string, keepGeneratedFiles: boolean = true): Promise<void> {
     this.logDebug('Cleaning up session', sessionId);
     const container = this.sessionContainers.get(sessionId);
     const config = this.sessionConfigs.get(sessionId);
@@ -463,7 +463,16 @@ EOL`],
         // Return container to pool after cleaning up workspace via ContainerManager
         await this.containerManager.returnContainerToPool(container);
       } else {
-        await this.containerManager.removeContainerAndDir(container);
+        let deleteDir = true;
+        if (keepGeneratedFiles) {
+          try {
+            const generated = await this.listWorkspaceFiles(sessionId, true);
+            if (generated.length > 0) {
+              deleteDir = false;
+            }
+          } catch {}
+        }
+        await this.containerManager.removeContainerAndDir(container, deleteDir);
       }
       this.sessionContainers.delete(sessionId);
       this.containerMeta.delete(container.id);
@@ -471,8 +480,16 @@ EOL`],
     this.sessionConfigs.delete(sessionId);
   }
 
-  async cleanup(): Promise<void> {
-    await this.containerManager.cleanup();
+  async cleanup(keepGeneratedFiles: boolean = true): Promise<void> {
+    // Clean each session respecting generated files flag
+    for (const sid of Array.from(this.sessionContainers.keys())) {
+      await this.cleanupSession(sid, keepGeneratedFiles);
+    }
+    // Finally, let container manager perform global cleanup (this only affects containers
+    // not tracked in sessionContainers; it will still delete their workspaces.)
+    if (!keepGeneratedFiles) {
+      await this.containerManager.cleanup();
+    }
     this.sessionContainers.clear();
     this.sessionConfigs.clear();
     this.containerMeta.clear();
