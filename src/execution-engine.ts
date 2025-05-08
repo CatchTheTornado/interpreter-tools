@@ -241,7 +241,10 @@ EOL`],
     const sessionId = config.sessionId ?? uuidv4();
 
     if (this.sessionConfigs.has(sessionId)) {
-      throw new Error(`Session ID ${sessionId} already exists`);
+      if (config.enforceNewSession) {
+        throw new Error(`Session ID ${sessionId} already exists`);
+      }
+      return sessionId; // reuse existing session
     }
 
     this.sessionConfigs.set(sessionId, config);

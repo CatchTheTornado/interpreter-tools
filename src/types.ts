@@ -56,6 +56,7 @@ export interface SessionConfig {
   poolConfig?: ContainerPoolConfig;
   containerConfig: ContainerConfig;
   sessionId?: string;
+  enforceNewSession?: boolean;
 }
 
 export interface ContainerMount {
