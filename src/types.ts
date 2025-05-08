@@ -55,6 +55,7 @@ export interface SessionConfig {
   strategy: ContainerStrategy;
   poolConfig?: ContainerPoolConfig;
   containerConfig: ContainerConfig;
+  sessionId?: string;
 }
 
 export interface ContainerMount {

@@ -232,7 +232,12 @@ EOL`],
   }
 
   async createSession(config: SessionConfig): Promise<string> {
-    const sessionId = uuidv4();
+    const sessionId = config.sessionId ?? uuidv4();
+
+    if (this.sessionConfigs.has(sessionId)) {
+      throw new Error(`Session ID ${sessionId} already exists`);
+    }
+
     this.sessionConfigs.set(sessionId, config);
 
     if (config.strategy === ContainerStrategy.PER_SESSION) {
