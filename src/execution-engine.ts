@@ -14,6 +14,7 @@ export class ExecutionEngine {
   private sessionConfigs: Map<string, SessionConfig>;
   private containerToSession: Map<string, string>;
   private depsInstalledContainers: Set<string>;
+  private containerFileBaselines: Map<string, Set<string>>;
 
   constructor() {
     this.containerManager = new ContainerManager();
@@ -21,6 +22,7 @@ export class ExecutionEngine {
     this.sessionConfigs = new Map();
     this.containerToSession = new Map();
     this.depsInstalledContainers = new Set();
+    this.containerFileBaselines = new Map();
   }
 
   private async prepareCodeFile(options: ExecutionOptions, tempDir: string): Promise<void> {
@@ -215,13 +217,17 @@ EOL`],
               if (!depsAlreadyInstalled) {
                 this.depsInstalledContainers.add(container.id);
               }
-              resolve({
+              const result: ExecutionResult = {
                 stdout,
                 stderr,
                 exitCode: info.ExitCode || 1,
                 executionTime: Date.now() - startTime,
                 workspaceDir: codePath
-              });
+              };
+
+              // Save baseline for generated file tracking
+              this.containerFileBaselines.set(container.id, new Set(this.listAllFiles(result.workspaceDir)));
+              resolve(result);
             } catch (error) {
               reject(error);
             }
@@ -388,5 +394,70 @@ EOL`],
     this.sessionContainers.clear();
     this.sessionConfigs.clear();
     this.containerToSession.clear();
+  }
+
+  private getWorkspaceDir(container: Docker.Container): string {
+    return tempPathForContainer(container.id.startsWith('it_') ? container.id : (container as any).name ?? '');
+  }
+
+  private listAllFiles(dir: string): string[] {
+    const results: string[] = [];
+    const items = fs.readdirSync(dir, { withFileTypes: true });
+    for (const item of items) {
+      const fullPath = path.join(dir, item.name);
+      if (item.isDirectory()) {
+        results.push(...this.listAllFiles(fullPath));
+      } else {
+        results.push(fullPath);
+      }
+    }
+    return results;
+  }
+
+  // Public helpers
+  async listWorkspaceFiles(sessionId: string, onlyGenerated = false): Promise<string[]> {
+    const container = this.sessionContainers.get(sessionId);
+    if (!container) throw new Error('Session not found');
+    const workspaceDir = this.getWorkspaceDir(container);
+    const currentFiles = this.listAllFiles(workspaceDir);
+
+    if (!onlyGenerated) return currentFiles;
+
+    const baseline = this.containerFileBaselines.get(container.id) ?? new Set<string>();
+    return currentFiles.filter(p => !baseline.has(p));
+  }
+
+  async addFileFromBase64(sessionId: string, relativePath: string, dataBase64: string): Promise<void> {
+    const container = this.sessionContainers.get(sessionId);
+    if (!container) throw new Error('Session not found');
+    const workspaceDir = this.getWorkspaceDir(container);
+    const fullPath = path.join(workspaceDir, relativePath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    const buffer = Buffer.from(dataBase64, 'base64');
+    fs.writeFileSync(fullPath, buffer);
+  }
+
+  async copyFileIntoWorkspace(sessionId: string, localPath: string, destRelativePath: string): Promise<void> {
+    const container = this.sessionContainers.get(sessionId);
+    if (!container) throw new Error('Session not found');
+    const workspaceDir = this.getWorkspaceDir(container);
+    const dest = path.join(workspaceDir, destRelativePath);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(localPath, dest);
+  }
+
+  async readFileBase64(sessionId: string, relativePath: string): Promise<string> {
+    const container = this.sessionContainers.get(sessionId);
+    if (!container) throw new Error('Session not found');
+    const workspaceDir = this.getWorkspaceDir(container);
+    const fullPath = path.join(workspaceDir, relativePath);
+    return fs.readFileSync(fullPath).toString('base64');
+  }
+
+  async readFileBinary(sessionId: string, relativePath: string): Promise<Buffer> {
+    const container = this.sessionContainers.get(sessionId);
+    if (!container) throw new Error('Session not found');
+    const workspaceDir = this.getWorkspaceDir(container);
+    return fs.readFileSync(path.join(workspaceDir, relativePath));
   }
 } 
