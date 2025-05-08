@@ -6,7 +6,6 @@ import { createCodeExecutionTool } from '../src/ai-tool';
   // Create tool with default settings (per_execution strategy)  - we set it to per_session to reuse the same container for multiple executions and to have access to the generated files
   const { codeExecutionTool, cleanup, executionEngine } = createCodeExecutionTool({ defaultStrategy: 'per_session' });
   executionEngine.setVerbosity('debug');
-
   try {
     console.log('Generating python script...');
     const res = await generateText({

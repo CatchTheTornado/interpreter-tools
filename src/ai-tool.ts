@@ -99,7 +99,7 @@ export function createCodeExecutionTool(config: CodeExecutionToolConfig = {}) {
 // Default instance with no mounts
 export const { codeExecutionTool, executionEngine, cleanup } = createCodeExecutionTool();
 
-function getImageForLanguage(language: string): string {
+export function getImageForLanguage(language: string): string {
   const cfg = LanguageRegistry.get(language);
   if (!cfg) throw new Error(`Unsupported language: ${language}`);
   return cfg.defaultImage;
