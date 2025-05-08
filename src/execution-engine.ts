@@ -453,11 +453,11 @@ EOL`],
     }
   }
 
-  async cleanupSession(sessionId: string, keepGeneratedFiles: boolean = true): Promise<void> {
+  async cleanupSession(sessionId: string, keepGeneratedFiles: boolean = false): Promise<void> {
     this.logDebug('Cleaning up session', sessionId);
     const container = this.sessionContainers.get(sessionId);
     const config = this.sessionConfigs.get(sessionId);
-
+    this.logDebug('Keep generated files?', keepGeneratedFiles);
     if (container) {
       if (config?.strategy === ContainerStrategy.POOL) {
         // Return container to pool after cleaning up workspace via ContainerManager
@@ -467,7 +467,9 @@ EOL`],
         if (keepGeneratedFiles) {
           try {
             const generatedArr = await this.listWorkspaceFiles(sessionId, true);
+            this.logDebug('Generated files', generatedArr);
             if (generatedArr.length > 0) {
+              this.logDebug('Keeping generated files', generatedArr);
               // Keep directory, just remove non-generated files
               const keepSet = new Set<string>(generatedArr);
               this.cleanWorkspaceKeepGenerated(container, keepSet);
@@ -483,7 +485,7 @@ EOL`],
     this.sessionConfigs.delete(sessionId);
   }
 
-  async cleanup(keepGeneratedFiles: boolean = true): Promise<void> {
+  async cleanup(keepGeneratedFiles: boolean = false): Promise<void> {
     // Clean each session respecting generated files flag
     for (const sid of Array.from(this.sessionContainers.keys())) {
       await this.cleanupSession(sid, keepGeneratedFiles);
