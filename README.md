@@ -545,6 +545,83 @@ await engine.executeCode(id, {
 
 ---
 
+### Injecting Files Into the Workspace
+
+Sometimes your code needs additional assets (datasets, JSON files, images, etc.). There are **two primary ways** to make them available inside the container:
+
+1. **Mount a host directory** – supply a `mounts` array in `containerConfig` when you create a session. This is the easiest way to share many files or large directories.
+
+   ```typescript
+   const sessionId = await engine.createSession({
+     strategy: ContainerStrategy.PER_EXECUTION,
+     containerConfig: {
+       image: 'python:3.11-alpine',
+       mounts: [
+         {
+           type: 'directory',                 // always "directory" for now
+           source: path.resolve(__dirname, 'assets'), // host path
+           target: '/workspace/assets'        // inside the container
+         }
+       ]
+     }
+   });
+   ```
+
+2. **Programmatically copy / create individual files** – use one of the helper methods that work *after* you have a session:
+
+   ```typescript
+   // (a) copy an existing file from the host
+   await engine.copyFileIntoWorkspace(sessionId, './input/data.json', 'data.json');
+
+   // (b) create a new file from a base64-encoded string
+   await engine.addFileFromBase64(
+     sessionId,
+     'notes/hello.txt',
+     Buffer.from('hi there').toString('base64')
+   );
+   ```
+
+Both helpers write directly to `/workspace`, so your script can reference the files with just the relative path.
+
+---
+
+### Handling Generated Files
+
+Interpreter Tools automatically tracks new files created in `/workspace` during an execution:
+
+* `ExecutionResult.generatedFiles` – list of absolute paths to the files created in that run.
+* `ExecutionResult.workspaceDir` – host path of the temporary workspace directory.
+
+Example:
+
+```typescript
+const result = await engine.executeCode(sessionId, {
+  language: 'python',
+  code: 'with open("report.txt", "w") as f:\n    f.write("done")',
+});
+
+console.log('New files:', result.generatedFiles);
+```
+
+You can retrieve file contents with:
+
+```typescript
+const pngBuffer = await engine.readFileBinary(sessionId, 'charts/plot.png');
+fs.writeFileSync('plot.png', pngBuffer);
+```
+
+#### Keeping generated files after cleanup
+
+By default, calling `engine.cleanupSession()` or `engine.cleanup()` removes the containers *and* their workspaces. Pass `true` to keep only the files that were detected as generated:
+
+```typescript
+await engine.cleanupSession(sessionId, /* keepGenerated = */ true);
+```
+
+All non-generated files are removed, the generated ones stay on disk so you can move or process them later. If you mounted a host directory, the files are already on the host and no special flag is needed.
+
+---
+
 Happy hacking! 
 
 ## License
