@@ -16,7 +16,7 @@ import { createCodeExecutionTool } from '../src/ai-tool';
         {
           role: 'user',
           content:
-            'Write a Python script that generates some random nice looking chart and saves a PNG or SVG chart of temperature change to /workspace/weather.png, and print only "done". Then run it with the codeExecutionTool (it supports python).' // instruction for AI
+            'Write a Python script that generates some random nice looking chart and saves a PNG or SVG chart of temperature change to /workspace/weather.png, and print only "done". Then run it only once with the codeExecutionTool (it supports python).' // instruction for AI
         }
       ],
       tools: { codeExecutionTool },
@@ -31,6 +31,6 @@ import { createCodeExecutionTool } from '../src/ai-tool';
       console.log('Generated files:', toolRes.generatedFiles);
     }
   } finally {
-    await cleanup();
+    //await cleanup();
   }
 })(); 

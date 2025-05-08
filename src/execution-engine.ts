@@ -256,6 +256,7 @@ EOL`],
 
               // Save baseline for generated file tracking
               this.containerFileBaselines.set(container.id, new Set(this.listAllFiles(result.workspaceDir)));
+              this.logDebug(result);
               resolve(result);
             } catch (error) {
               reject(error);
@@ -413,6 +414,7 @@ EOL`],
   }
 
   async cleanupSession(sessionId: string): Promise<void> {
+    this.logDebug('Cleaning up session', sessionId);
     const container = this.sessionContainers.get(sessionId);
     const config = this.sessionConfigs.get(sessionId);
 
