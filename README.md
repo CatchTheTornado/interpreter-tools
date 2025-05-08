@@ -52,7 +52,7 @@ const { createCodeExecutionTool } = require('interpreter-tools');
 async function main() {
   try {
     // Create a code execution tool instance
-    const codeExecutionTool = createCodeExecutionTool();
+    const { codeExecutionTool } = createCodeExecutionTool();
 
     // Use generateText with codeExecutionTool to generate and execute code
     const result = await generateText({
@@ -358,7 +358,7 @@ The main components of this project are:
 ```typescript
 import { createCodeExecutionTool } from 'interpreter-tools';
 
-const codeExecutionTool = createCodeExecutionTool();
+const { codeExecutionTool }  = createCodeExecutionTool();
 
 const result = await codeExecutionTool.execute({
   language: 'javascript',
@@ -422,8 +422,8 @@ Factory that exposes the engine as an [OpenAI function-calling](https://platform
 ```typescript
 import { createCodeExecutionTool } from 'interpreter-tools';
 
-const tool = createCodeExecutionTool();
-const { stdout } = await tool.execute({
+const { codeExecutionTool } = createCodeExecutionTool();
+const { stdout } = await codeExecutionTool.execute({
   language: 'python',
   code: 'print("Hello")'
 });

@@ -31,7 +31,7 @@ file contents
 Separate each file with a blank line.`
         }
       ],
-      tools: { codeExecutionTool: createCodeExecutionTool() },
+      tools: { codeExecutionTool: createCodeExecutionTool().codeExecutionTool },
       toolChoice: 'auto'
     });
 
@@ -62,7 +62,7 @@ Separate each file with a blank line.`
     console.log('** Created files:', files.map(f => f.name).join(', '));
 
     // Create a code execution tool with the project directory mounted
-    const codeExecutionTool = createCodeExecutionTool({
+    const { codeExecutionTool } = createCodeExecutionTool({
       mounts: [{
         type: 'directory',
         source: projectDir,
