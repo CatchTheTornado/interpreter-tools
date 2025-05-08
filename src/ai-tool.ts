@@ -8,10 +8,13 @@ interface CodeExecutionResult {
   stderr: string;
   exitCode: number;
   executionTime: number;
+  workspaceDir: string;
+  generatedFiles: string[];
 }
 
 interface CodeExecutionToolConfig {
   mounts?: ContainerMount[];
+  defaultStrategy?: 'per_execution' | 'pool' | 'per_session';
 }
 
 export function createCodeExecutionTool(config: CodeExecutionToolConfig = {}) {
@@ -49,7 +52,7 @@ export function createCodeExecutionTool(config: CodeExecutionToolConfig = {}) {
       code,
       language,
       dependencies = [],
-      strategy = 'per_execution',
+      strategy = config.defaultStrategy ?? 'per_execution',
       sessionId,
       environment = {},
       runApp,
