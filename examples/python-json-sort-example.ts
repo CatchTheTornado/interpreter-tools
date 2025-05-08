@@ -46,7 +46,13 @@ const generateCode = generateText;
       ]
     });
 
-    const jsonContent = jsonRes.text.trim();
+    // Remove potential Markdown code fences from the LLM response
+    let jsonRaw = jsonRes.text.trim();
+    if (jsonRaw.startsWith('```')) {
+      // Strip leading ```json or ``` and trailing ```
+      jsonRaw = jsonRaw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
+    }
+    const jsonContent = jsonRaw.trim();
     console.log('Fake People JSON:', jsonContent.substring(0, 120) + ' …');
 
     // Write the JSON into the container workspace so that subsequent code can read it.
@@ -65,7 +71,7 @@ const generateCode = generateText;
         {
           role: 'user',
           content:
-            'Write a Python script that: 1) reads /workspace/people.json, 2) sorts the people by salary descending, 3) prints the sorted list in a readable table, 4) saves the sorted list as /workspace/people_sorted.csv. Use only built-in Python libraries (json, csv) so no external dependencies are required. Use the tool "codeExecutionTool"provided to execute the code.'
+            'Write a Python script that: 1) reads /workspace/people.json which format is: ' + jsonContent + ' , 2) sorts the people by salary descending, 3) prints the sorted list in a readable table, 4) saves the sorted list as /workspace/people_sorted.csv. Use only built-in Python libraries (json, csv) so no external dependencies are required. Use the tool "codeExecutionTool"provided to execute the code.'
         }
       ],
       tools: { codeExecutionTool },
