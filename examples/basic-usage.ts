@@ -36,7 +36,7 @@ console.log('Average:', average);
     console.log('Exit Code:', result.exitCode);
     console.log('Execution Time:', result.executionTime, 'ms');
     console.log('Container Workspace folder:', result.workspaceDir);
-
+    console.log('Generated Files:', result.generatedFiles);
   } catch (error) {
     console.error('Error:', error);
   } finally {
