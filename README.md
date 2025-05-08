@@ -280,6 +280,31 @@ Run it with:
 yarn ts-node examples/python-example.ts
 ```
 
+### Python Chart Example
+[`examples/python-chart-example.js`](./examples/python-chart-example.js)
+Demonstrates how to:
+- Generate files from within a Python script (e.g., PNG charts)
+- Persist and retrieve these generated artifacts from the container
+- Handle file management workflows when running Python code via the engine
+
+Run it with:
+```bash
+node examples/python-chart-example.js
+```
+
+### Python JSON Sort Example
+[`examples/python-json-sort-example.js`](./examples/python-json-sort-example.js)
+Demonstrates how to:
+- Inject files (in this case JSON) into the container before execution
+- Generate additional files inside the container
+- Sort and process JSON data using a Python script
+- Retrieve the resulting files back to the host
+
+Run it with:
+```bash
+node examples/python-json-sort-example.js
+```
+
 ### Shell JSON Processing Example
 [`examples/shell-json-example.ts`](./examples/shell-json-example.ts)
 Demonstrates how to:
