@@ -13,6 +13,7 @@ interface ContainerMeta {
   depsInstalled: boolean;
   baselineFiles: Set<string>;
   workspaceDir: string;
+  generatedFiles: Set<string>;
 }
 
 export class ExecutionEngine {
@@ -252,6 +253,10 @@ EOL`],
                 generatedFiles = await this.listWorkspaceFiles(sid, true);
               }
 
+              if (meta) {
+                meta.generatedFiles = new Set<string>(generatedFiles);
+              }
+
               const result: ExecutionResult = {
                 stdout,
                 stderr,
@@ -314,7 +319,8 @@ EOL`],
         sessionId,
         depsInstalled: false,
         baselineFiles: new Set<string>(),
-        workspaceDir: codeDir
+        workspaceDir: codeDir,
+        generatedFiles: new Set<string>()
       });
     }
 
@@ -356,7 +362,8 @@ EOL`],
             sessionId,
             depsInstalled: false,
             baselineFiles: new Set<string>(),
-            workspaceDir: codePath
+            workspaceDir: codePath,
+            generatedFiles: new Set<string>()
           });
           break;
         }
@@ -400,7 +407,8 @@ EOL`],
                 sessionId,
                 depsInstalled: false,
                 baselineFiles: new Set<string>(),
-                workspaceDir: codePath.length ? codePath : this.getWorkspaceDir(sessionContainer)
+                workspaceDir: codePath.length ? codePath : this.getWorkspaceDir(sessionContainer),
+                generatedFiles: new Set<string>()
               });
             }
           }
@@ -466,10 +474,10 @@ EOL`],
         let deleteDir = true;
         if (keepGeneratedFiles) {
           try {
-            const generatedArr = await this.listWorkspaceFiles(sessionId, true);
-            this.logDebug('Generated files', generatedArr);
+            const metaForCleanup = this.containerMeta.get(container.id);
+            const generatedArr = metaForCleanup ? Array.from(metaForCleanup.generatedFiles) : [];
+            this.logDebug('Keeping generated files', generatedArr);
             if (generatedArr.length > 0) {
-              this.logDebug('Keeping generated files', generatedArr);
               // Keep directory, just remove non-generated files
               const keepSet = new Set<string>(generatedArr);
               this.cleanWorkspaceKeepGenerated(container, keepSet);
