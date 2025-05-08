@@ -168,6 +168,10 @@ EOL`],
       command = langCfgInline.buildInlineCommand(depsAlreadyInstalled);
     }
 
+                  // Save baseline for generated file tracking
+    this.containerFileBaselines.set(container.id, new Set(this.listAllFiles(codePath)));
+
+
     return new Promise((resolve, reject) => {
       container.exec({
         Cmd: command,
@@ -217,12 +221,20 @@ EOL`],
               if (!depsAlreadyInstalled) {
                 this.depsInstalledContainers.add(container.id);
               }
+              const sid = this.containerToSession.get(container.id);
+              let generatedFiles: string[] = [];
+              if (sid) {
+                // listWorkspaceFiles updates baseline internally, so call first
+                generatedFiles = await this.listWorkspaceFiles(sid, true);
+              }
+
               const result: ExecutionResult = {
                 stdout,
                 stderr,
                 exitCode: info.ExitCode || 1,
                 executionTime: Date.now() - startTime,
-                workspaceDir: codePath
+                workspaceDir: codePath,
+                generatedFiles
               };
 
               // Save baseline for generated file tracking
