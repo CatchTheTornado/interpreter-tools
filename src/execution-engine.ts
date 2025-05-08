@@ -6,26 +6,27 @@ import * as path from 'path';
 import Docker from 'dockerode';
 import { Duplex } from 'stream';
 import { LanguageRegistry } from './languages';
-import { BASE_TMP_DIR, tempPathForContainer } from './constants';
+import { tempPathForContainer } from './constants';
+
+interface ContainerMeta {
+  sessionId: string;
+  depsInstalled: boolean;
+  baselineFiles: Set<string>;
+  workspaceDir: string;
+}
 
 export class ExecutionEngine {
   private containerManager: ContainerManager;
   private sessionContainers: Map<string, Docker.Container>;
   private sessionConfigs: Map<string, SessionConfig>;
-  private containerToSession: Map<string, string>;
-  private depsInstalledContainers: Set<string>;
-  private containerFileBaselines: Map<string, Set<string>>;
-  private containerWorkspaces: Map<string, string>;
+  private containerMeta: Map<string, ContainerMeta>;
   private verbosity: 'info' | 'debug';
 
   constructor() {
     this.containerManager = new ContainerManager();
     this.sessionContainers = new Map();
     this.sessionConfigs = new Map();
-    this.containerToSession = new Map();
-    this.depsInstalledContainers = new Set();
-    this.containerFileBaselines = new Map();
-    this.containerWorkspaces = new Map();
+    this.containerMeta = new Map();
     this.verbosity = 'info';
   }
 
@@ -104,7 +105,8 @@ export class ExecutionEngine {
     }
 
     // Determine if dependencies are already installed for this container (JS/TS)
-    const depsAlreadyInstalled = this.depsInstalledContainers.has(container.id);
+    const meta = this.containerMeta.get(container.id);
+    const depsAlreadyInstalled = meta?.depsInstalled ?? false;
 
     if (options.runApp) {
       // Validate that the working directory is mounted
@@ -177,6 +179,7 @@ EOL`],
         });
       }
 
+      this.logDebug('Installing dependencies', options.dependencies);
       // If the language defines a dependency installation step, run it first.
       if (langCfgInline.installDependencies) {
         await langCfgInline.installDependencies(container, options);
@@ -189,7 +192,9 @@ EOL`],
     this.logDebug('Executing command:', command.join(' '));
 
     // Save baseline for generated file tracking (only workspace files)
-    this.containerFileBaselines.set(container.id, new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath))));
+    if (meta) {
+      meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
+    }
 
     return new Promise((resolve, reject) => {
       container.exec({
@@ -237,10 +242,10 @@ EOL`],
             try {
               const info = await exec.inspect();
               // Mark container as having dependencies installed for future runs
-              if (!depsAlreadyInstalled) {
-                this.depsInstalledContainers.add(container.id);
+              if (!depsAlreadyInstalled && meta) {
+                meta.depsInstalled = true;
               }
-              const sid = this.containerToSession.get(container.id);
+              const sid = meta?.sessionId;
               let generatedFiles: string[] = [];
               if (sid) {
                 // listWorkspaceFiles updates baseline internally, so call first
@@ -257,7 +262,9 @@ EOL`],
               };
 
               // Save baseline for generated file tracking (only workspace files)
-              this.containerFileBaselines.set(container.id, new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath))));
+              if (meta) {
+                meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
+              }
               this.logDebug(result);
               resolve(result);
             } catch (error) {
@@ -303,8 +310,12 @@ EOL`],
         ]
       });
       this.sessionContainers.set(sessionId, container);
-      this.containerWorkspaces.set(container.id, codeDir);
-      this.containerToSession.set(container.id, sessionId);
+      this.containerMeta.set(container.id, {
+        sessionId,
+        depsInstalled: false,
+        baselineFiles: new Set<string>(),
+        workspaceDir: codeDir
+      });
     }
 
     return sessionId;
@@ -341,8 +352,12 @@ EOL`],
             ]
           });
           this.sessionContainers.set(sessionId, container);
-          this.containerWorkspaces.set(container.id, codePath);
-          this.containerToSession.set(container.id, sessionId);
+          this.containerMeta.set(container.id, {
+            sessionId,
+            depsInstalled: false,
+            baselineFiles: new Set<string>(),
+            workspaceDir: codePath
+          });
           break;
         }
 
@@ -376,10 +391,18 @@ EOL`],
               sessionContainer = pooledContainer;
             }
             this.sessionContainers.set(sessionId, sessionContainer);
-            if (codePath.length) {
-              this.containerWorkspaces.set(sessionContainer.id, codePath);
+            const existingMeta = this.containerMeta.get(sessionContainer.id);
+            if (existingMeta) {
+              existingMeta.sessionId = sessionId;
+              if (codePath.length) existingMeta.workspaceDir = codePath;
+            } else {
+              this.containerMeta.set(sessionContainer.id, {
+                sessionId,
+                depsInstalled: false,
+                baselineFiles: new Set<string>(),
+                workspaceDir: codePath.length ? codePath : this.getWorkspaceDir(sessionContainer)
+              });
             }
-            this.containerToSession.set(sessionContainer.id, sessionId);
           }
           container = sessionContainer;
           break;
@@ -405,13 +428,22 @@ EOL`],
         codePath = tempPathForContainer(info.Name.replace('/', ''));
       }
 
+      // For PER_SESSION strategy prepare workspace only on first execution
+      if (config.strategy === ContainerStrategy.PER_SESSION) {
+        const metaPrepare = this.containerMeta.get(container.id);
+        if (metaPrepare && metaPrepare.baselineFiles.size === 0) {
+          await this.prepareCodeFile(options, codePath);
+          metaPrepare.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
+        }
+      }
+
       const result = await this.executeInContainer(container, options, config, codePath);
 
       if (config.strategy === ContainerStrategy.POOL) {
         // Do nothing here; container remains assigned for session lifetime.
       } else if (config.strategy === ContainerStrategy.PER_EXECUTION) {
         await this.containerManager.removeContainerAndDir(container);
-        this.containerToSession.delete(container.id);
+        this.containerMeta.delete(container.id);
         this.sessionContainers.delete(sessionId);
       }
 
@@ -434,7 +466,7 @@ EOL`],
         await this.containerManager.removeContainerAndDir(container);
       }
       this.sessionContainers.delete(sessionId);
-      this.containerToSession.delete(container.id);
+      this.containerMeta.delete(container.id);
     }
     this.sessionConfigs.delete(sessionId);
   }
@@ -443,12 +475,12 @@ EOL`],
     await this.containerManager.cleanup();
     this.sessionContainers.clear();
     this.sessionConfigs.clear();
-    this.containerToSession.clear();
+    this.containerMeta.clear();
   }
 
   private  getWorkspaceDir(container: Docker.Container): string {
-    const cached = this.containerWorkspaces.get(container.id);
-    if (cached) return cached;
+    const meta = this.containerMeta.get(container.id);
+    if (meta) return meta.workspaceDir;
     const cnameRaw = (container as any).name ?? '';
     const cname = cnameRaw.startsWith('/') ? cnameRaw.slice(1) : cnameRaw;
     return tempPathForContainer(cname);
@@ -477,7 +509,7 @@ EOL`],
 
     if (!onlyGenerated) return currentFiles;
 
-    const baseline = this.containerFileBaselines.get(container.id) ?? new Set<string>();
+    const baseline = this.containerMeta.get(container.id)?.baselineFiles ?? new Set<string>();
     return currentFiles.filter(p => p.startsWith(workspaceDir) && !baseline.has(p));
   }
 

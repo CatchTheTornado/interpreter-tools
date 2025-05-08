@@ -10,13 +10,13 @@ import { createCodeExecutionTool } from '../src/ai-tool';
   try {
     console.log('Generating python script...');
     const res = await generateText({
-      model: openai('gpt-4o-mini'),
-      maxSteps: 8,
+      model: openai('gpt-4o'),
+      maxSteps: 1,
       messages: [
         {
           role: 'user',
           content:
-            'Write a Python script that generates some random nice looking chart and saves a PNG or SVG chart of temperature change to /workspace/weather.png, and print only "done". Then run it only once with the codeExecutionTool (it supports python).' // instruction for AI
+            'Write a Python script that generates random nice looking chart and saves a PNG or SVG chart of temperature change to /workspace/weather.png. Run this code only once with the codeExecutionTool. Pass all required libraries (eg. matplotlib) as dependencies to the tool to be installed by "pip install".' // instruction for AI
         }
       ],
       tools: { codeExecutionTool },

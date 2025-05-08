@@ -1,4 +1,5 @@
 import { ExecutionEngine, ContainerStrategy } from './index';
+import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { ContainerMount } from './types';
 import { LanguageRegistry } from './languages';
@@ -14,6 +15,7 @@ interface CodeExecutionResult {
 
 interface CodeExecutionToolConfig {
   mounts?: ContainerMount[];
+  sessionId?: string;
   defaultStrategy?: 'per_execution' | 'pool' | 'per_session';
 }
 
@@ -28,9 +30,8 @@ export function createCodeExecutionTool(config: CodeExecutionToolConfig = {}) {
   const codeExecutionSchema = z.object({
     code: z.string().describe('The code to execute.'),
     language: languageEnum.describe('The programming language of the code.'),
-    dependencies: z.array(z.string()).optional().describe('Optional list of dependencies to install.'),
-    strategy: z.enum(['per_execution', 'pool', 'per_session']).optional().describe('Container strategy to use.'),
-    sessionId: z.string().optional().describe('Custom session ID (for re-use across calls).'),
+    dependencies: z.array(z.string()).optional().describe('List of dependencies used by the code to be installed.'),
+//    sessionId: z.string().optional().describe('Custom session ID (for re-use across calls).'),
     environment: z.record(z.string()).optional().describe('Environment variables to set in the container.'),
     runApp: z.object({
       entryFile: z.string().describe('Path to the entry file relative to the mounted directory'),
@@ -52,12 +53,13 @@ export function createCodeExecutionTool(config: CodeExecutionToolConfig = {}) {
       code,
       language,
       dependencies = [],
-      strategy = config.defaultStrategy ?? 'per_execution',
-      sessionId,
+  //    sessionId,
       environment = {},
       runApp,
       streamOutput
     }: z.infer<typeof codeExecutionSchema>): Promise<CodeExecutionResult> => {
+      const strategy = config.defaultStrategy ?? 'per_execution';
+      const sessionId = config.sessionId ?? uuidv4();
       const session = await engine.createSession({
         sessionId,
         strategy: ContainerStrategy[strategy.toUpperCase() as keyof typeof ContainerStrategy],
