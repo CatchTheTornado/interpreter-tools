@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import Docker from 'dockerode';
 import { Duplex } from 'stream';
-import { LanguageRegistry } from './languages';
+import { LanguageRegistry, LanguageConfig } from './languages';
 import { tempPathForContainer } from './constants';
 import * as crypto from 'crypto';
 
@@ -188,6 +188,60 @@ export class ExecutionEngine {
     return crypto.createHash('sha256').update(sortedDeps.join('|')).digest('hex');
   }
 
+  /**
+   * Centralised dependency-installation logic used by both inline and runApp paths.
+   * Returns whether dependencies were installed successfully (or were already installed),
+   * along with captured stdout / stderr so the caller can forward them.
+   */
+  private async installDependencies(
+    container: Docker.Container,
+    langCfg: LanguageConfig,
+    options: ExecutionOptions,
+    depsAlreadyInstalled: boolean,
+    codePath: string,
+    meta: ContainerMeta | undefined
+  ): Promise<{ depsInstallationSucceeded: boolean; stdout: string; stderr: string }> {
+    // Fast-path when nothing to do
+    if (depsAlreadyInstalled) {
+      return { depsInstallationSucceeded: true, stdout: '', stderr: '' };
+    }
+
+    this.logDebug('Installing dependencies', options.dependencies);
+
+    let depOut = '';
+    let depErr = '';
+    let installSucceeded = false;
+
+    if (langCfg.installDependencies) {
+      const { stdout, stderr, exitCode } = await langCfg.installDependencies(container, options);
+      depOut = stdout;
+      depErr = stderr;
+
+      this.logDebug('Dependency installation stdout:', depOut);
+      this.logDebug('Dependency installation stderr:', depErr);
+
+      if (exitCode !== 0) {
+        // Surface streams if caller requested them
+        if (options.streamOutput?.dependencyStdout && depOut) options.streamOutput.dependencyStdout(depOut);
+        if (options.streamOutput?.dependencyStderr && depErr) options.streamOutput.dependencyStderr(depErr);
+      } else {
+        installSucceeded = true;
+      }
+    } else {
+      // No explicit installer – treat as success
+      installSucceeded = true;
+    }
+
+    // When installation succeeded, we refresh the baseline to ensure that files created
+    // during dependency installation are not incorrectly flagged as generated during
+    // this execution. This helps maintain an accurate baseline for subsequent runs.
+    if (installSucceeded && meta) {
+      meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
+    }
+
+    return { depsInstallationSucceeded: installSucceeded, stdout: depOut, stderr: depErr };
+  }
+
   private async prepareCodeFile(options: ExecutionOptions, tempDir: string): Promise<void> {
     fs.mkdirSync(tempDir, { recursive: true });
 
@@ -291,36 +345,18 @@ export class ExecutionEngine {
           throw new Error(`Unsupported language: ${options.language}`);
         }
 
-        // ----- Dependency installation phase (runs only when they have not been installed yet and before runApp command) -----
-        let depOut = '';
-        let depErr = '';
-
-        if (!depsAlreadyInstalled) {
-          this.logDebug('Installing dependencies', options.dependencies);
-
-          if (langCfgRunApp.installDependencies) {
-            const { stdout: o, stderr: e, exitCode } = await langCfgRunApp.installDependencies(container, options);
-            depOut = o;
-            depErr = e;
-            dependencyStdout = o;
-            dependencyStderr = e;
-
-            this.logDebug('Dependency installation stdout:', depOut);
-            this.logDebug('Dependency installation stderr:', depErr);
-
-            if (exitCode !== 0) {
-              // Surface dependency installation output streams if provided
-              if (options.streamOutput?.dependencyStdout && depOut) options.streamOutput.dependencyStdout(depOut);
-              if (options.streamOutput?.dependencyStderr && depErr) options.streamOutput.dependencyStderr(depErr);
-            } else {
-              depsInstallationSucceededGlobal = true;
-              // After successful dependency installation, refresh baseline so dependency files are not treated as generated
-              if (meta) {
-                meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
-              }
-            }
-          }
-        }
+        // ----- Dependency installation phase (centralised) -----
+        const depResRunApp = await this.installDependencies(
+          container,
+          langCfgRunApp,
+          options,
+          depsAlreadyInstalled,
+          codePath,
+          meta
+        );
+        dependencyStdout = depResRunApp.stdout;
+        dependencyStderr = depResRunApp.stderr;
+        depsInstallationSucceededGlobal = depResRunApp.depsInstallationSucceeded;
 
         // Build command using LanguageRegistry (all languages)
         command = langCfgRunApp.buildRunAppCommand(options.runApp.entryFile, depsInstallationSucceededGlobal);
@@ -375,62 +411,18 @@ EOL`],
           });
         }
 
-        // ----- Dependency installation phase (runs only when they have not been installed yet) -----
-        let depOut = '';
-        let depErr = '';
-
-        if (!depsAlreadyInstalled) {
-          this.logDebug('Installing dependencies', options.dependencies);
-
-          const runAndCapture = async (cmd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
-            const exec = await container.exec({ Cmd: ['sh', '-c', cmd], AttachStdout: true, AttachStderr: true });
-            const stream = await exec.start({ hijack: true, stdin: false });
-            let stdout = '';
-            let stderr = '';
-            await new Promise<void>((resolve) => {
-              container.modem.demuxStream(stream as Duplex,
-                {
-                  write: (chunk: Buffer) => { stdout += chunk.toString(); }
-                },
-                {
-                  write: (chunk: Buffer) => { stderr += chunk.toString(); }
-                });
-              stream.on('end', resolve);
-            });
-            const info = await exec.inspect();
-            return { stdout, stderr, exitCode: info.ExitCode ?? 1 };
-          };
-
-          if (langCfgInline.installDependencies) {
-            const { stdout: o, stderr: e, exitCode } = await langCfgInline.installDependencies(container, options);
-            depOut = o;
-            depErr = e;
-            dependencyStdout = o;
-            dependencyStderr = e;
-
-            this.logDebug('Dependency installation stdout:', depOut);
-            this.logDebug('Dependency installation stderr:', depErr);
-
-            if (exitCode !== 0) {
-              // Surface dependency installation output streams if provided
-              if (options.streamOutput?.dependencyStdout && depOut) options.streamOutput.dependencyStdout(depOut);
-              if (options.streamOutput?.dependencyStderr && depErr) options.streamOutput.dependencyStderr(depErr);
-            } else {
-              depsInstallationSucceededGlobal = true;
-              // After successful dependency installation, refresh baseline so dependency files are not treated as generated
-              if (meta) {
-                meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
-              }
-            }
-          } else {
-            // No installer; mark success
-            depsInstallationSucceededGlobal = true;
-            // Refresh baseline when dependencies considered successfully installed (even if no installer) to ensure subsequent file tracking is accurate
-            if (meta) {
-              meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
-            }
-          }
-        }
+        // ----- Dependency installation phase (centralised) -----
+        const depResInline = await this.installDependencies(
+          container,
+          langCfgInline,
+          options,
+          depsAlreadyInstalled,
+          codePath,
+          meta
+        );
+        dependencyStdout = depResInline.stdout;
+        dependencyStderr = depResInline.stderr;
+        depsInstallationSucceededGlobal = depResInline.depsInstallationSucceeded;
 
         // Build command using LanguageRegistry (all languages)
         command = langCfgInline.buildInlineCommand(depsInstallationSucceededGlobal);
