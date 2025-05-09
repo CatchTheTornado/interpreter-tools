@@ -867,7 +867,7 @@ EOL`],
         createdAt: new Date(),
         lastExecutedAt: null,
         containerId: container.id,
-        imageName: expectedImage
+        imageName: config.containerConfig.image
       });
     }
 
