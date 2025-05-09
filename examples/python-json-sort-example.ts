@@ -84,6 +84,7 @@ const generateCode = generateText;
     const toolResult = (pyRes.toolResults?.[0] as any)?.result;
     if (toolResult) {
       console.log('Generated files inside container:', toolResult.generatedFiles);
+      console.log('Generated files for the whole session:', toolResult.sessionGeneratedFiles);
     }
   } finally {
     // Keep generated files when cleaning up; set to true so we can inspect them after the script ends if needed.

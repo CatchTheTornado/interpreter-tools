@@ -38,6 +38,7 @@ export interface ExecutionResult {
   executionTime: number;
   workspaceDir: string;
   generatedFiles: string[];
+  sessionGeneratedFiles: string[]; // All files generated across all runs in the session
 }
 
 export interface ContainerPoolConfig {

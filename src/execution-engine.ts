@@ -16,6 +16,7 @@ interface ContainerMeta {
   baselineFiles: Set<string>;
   workspaceDir: string;
   generatedFiles: Set<string>;
+  sessionGeneratedFiles: Set<string>;
 }
 
 export class ExecutionEngine {
@@ -195,7 +196,7 @@ EOL`],
 
     this.logDebug('Executing command:', command.join(' '));
 
-    // Save baseline for generated file tracking (only workspace files)
+    // Save current baseline before execution
     if (meta) {
       meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
     }
@@ -253,12 +254,18 @@ EOL`],
               const sid = meta?.sessionId;
               let generatedFiles: string[] = [];
               if (sid) {
-                // listWorkspaceFiles updates baseline internally, so call first
+                // Get newly generated files since last run
                 generatedFiles = await this.listWorkspaceFiles(sid, true);
               }
 
               if (meta) {
+                // Update current run's generated files
                 meta.generatedFiles = new Set<string>(generatedFiles);
+                // Add to accumulated generated files
+                if (!meta.sessionGeneratedFiles) {
+                  meta.sessionGeneratedFiles = new Set<string>();
+                }
+                generatedFiles.forEach(file => meta.sessionGeneratedFiles.add(file));
               }
 
               const result: ExecutionResult = {
@@ -267,13 +274,10 @@ EOL`],
                 exitCode: info.ExitCode || 1,
                 executionTime: Date.now() - startTime,
                 workspaceDir: codePath,
-                generatedFiles
+                generatedFiles,
+                sessionGeneratedFiles: meta ? Array.from(meta.sessionGeneratedFiles) : []
               };
 
-              // Save baseline for generated file tracking (only workspace files)
-              if (meta) {
-                meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
-              }
               this.logDebug(result);
               resolve(result);
             } catch (error) {
@@ -325,7 +329,8 @@ EOL`],
         depsChecksum: null,
         baselineFiles: new Set<string>(),
         workspaceDir: codeDir,
-        generatedFiles: new Set<string>()
+        generatedFiles: new Set<string>(),
+        sessionGeneratedFiles: new Set<string>()
       });
     }
 
@@ -369,7 +374,8 @@ EOL`],
             depsChecksum: null,
             baselineFiles: new Set<string>(),
             workspaceDir: codePath,
-            generatedFiles: new Set<string>()
+            generatedFiles: new Set<string>(),
+            sessionGeneratedFiles: new Set<string>()
           });
           break;
         }
@@ -415,7 +421,8 @@ EOL`],
                 depsChecksum: null,
                 baselineFiles: new Set<string>(),
                 workspaceDir: codePath.length ? codePath : this.getWorkspaceDir(sessionContainer),
-                generatedFiles: new Set<string>()
+                generatedFiles: new Set<string>(),
+                sessionGeneratedFiles: new Set<string>()
               });
             }
           }
@@ -482,7 +489,7 @@ EOL`],
         if (keepGeneratedFiles) {
           try {
             const metaForCleanup = this.containerMeta.get(container.id);
-            const generatedArr = metaForCleanup ? Array.from(metaForCleanup.generatedFiles) : [];
+            const generatedArr = metaForCleanup ? Array.from(metaForCleanup.sessionGeneratedFiles) : [];
             this.logDebug('Keeping generated files', generatedArr);
             if (generatedArr.length > 0) {
               // Keep directory, just remove non-generated files
