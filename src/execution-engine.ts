@@ -491,6 +491,11 @@ EOL`],
       throw new Error('Invalid session ID');
     }
 
+    // Guard: POOL strategy does not support shared workspaces
+    if (config.strategy === ContainerStrategy.POOL && options.workspaceSharing === 'shared') {
+      throw new Error('workspaceSharing "shared" is not supported with ContainerStrategy.POOL; workspace is always cleared between executions. Use PER_SESSION if you need a persistent workspace.');
+    }
+
     let codePath: string = '';
     let container: Docker.Container;
 

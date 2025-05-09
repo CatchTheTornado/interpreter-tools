@@ -24,7 +24,7 @@ export class ContainerManager {
     this.pool = [];
     this.poolConfig = {
       maxSize: 5,
-      minSize: 2,
+      minSize: 1, // min size is 1 because we want to reuse containers
       idleTimeout: 300000 // 5 minutes
     };
   }
