@@ -4,6 +4,7 @@ import { createCodeExecutionTool } from '../src/code-execution-tool';
 import * as fs from 'fs';
 import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import { exec } from 'child_process';
 
 async function main() {
   try {
@@ -62,7 +63,7 @@ Separate each file with a blank line.`
     console.log('** Created files:', files.map(f => f.name).join(', '));
 
     // Create a code execution tool with the project directory mounted
-    const { codeExecutionTool } = createCodeExecutionTool({
+    const { codeExecutionTool, executionEngine } = createCodeExecutionTool({
       mounts: [{
         type: 'directory',
         source: projectDir,
@@ -70,6 +71,7 @@ Separate each file with a blank line.`
       }]
     });
 
+    executionEngine.setVerbosity('info');
     console.log('Executing project...');
     
     // Execute the project using codeExecutionTool
@@ -82,6 +84,13 @@ Separate each file with a blank line.`
       },
       dependencies: ['express'],
       streamOutput: {
+        dependencyStdout: (data) => {
+          console.log('Dependency stdout:', data);
+        },
+        dependencyStderr: (data) => {
+          console.error('Dependency stderr:', data);
+        },
+
         stdout: (data) => {
           console.log('Container stdout:', data);
         },

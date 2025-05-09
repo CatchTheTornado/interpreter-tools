@@ -75,6 +75,12 @@ Please format your response as a shell script with comments explaining each step
       },
       dependencies: ['jq'],
       streamOutput: {
+        dependencyStdout: (data) => {
+          console.log('Dependency stdout:', data);
+        },
+        dependencyStderr: (data) => {
+          console.error('Dependency stderr:', data);
+        },        
         stdout: (data) => {
           console.log('Container stdout:', data);
         },

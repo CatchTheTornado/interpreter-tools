@@ -8,6 +8,8 @@ import { LanguageRegistry } from './languages';
 interface CodeExecutionResult {
   stdout: string;
   stderr: string;
+  dependencyStdout: string;
+  dependencyStderr: string;
   exitCode: number;
   executionTime: number;
   workspaceDir: string;
@@ -45,6 +47,8 @@ export function createCodeExecutionTool(config: CodeExecutionToolConfig = {}) {
     streamOutput: z.object({
       stdout: z.function().args(z.string()).optional(),
       stderr: z.function().args(z.string()).optional(),
+      dependencyStdout: z.function().args(z.string()).optional(),
+      dependencyStderr: z.function().args(z.string()).optional(),
       stdin: z.function().args(z.string()).optional()
     }).optional().describe('Optional streaming output handlers')
   });

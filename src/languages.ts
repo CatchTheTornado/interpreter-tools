@@ -11,7 +11,7 @@ export interface LanguageConfig {
   prepareFiles: (options: ExecutionOptions, tempDir: string) => void;
   buildInlineCommand: (depsInstalled: boolean) => string[];
   buildRunAppCommand: (entryFile: string, depsInstalled: boolean) => string[];
-  installDependencies?: (container: Docker.Container, options: ExecutionOptions) => Promise<void>;
+  installDependencies?: (container: Docker.Container, options: ExecutionOptions) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
 }
 
 const jsTsPrepare = (options: ExecutionOptions, tempDir: string, filename: string) => {
@@ -54,24 +54,68 @@ export const defaultLanguageConfigs: LanguageConfig[] = [
     defaultImage: 'node:18-alpine',
     codeFilename: 'code.js',
     prepareFiles: (options, dir) => jsTsPrepare(options, dir, 'code.js'),
-    buildInlineCommand: (depsInstalled) => [
-      'sh', '-c', `${depsInstalled ? '' : 'yarn install && '}node code.js`
+    buildInlineCommand: (_depsInstalled) => [
+      'sh', '-c', 'node code.js'
     ],
-    buildRunAppCommand: (entry, depsInstalled) => [
-      'sh', '-c', `${depsInstalled ? '' : 'yarn install && '}node ${entry}`
-    ]
+    buildRunAppCommand: (entry, _depsInstalled) => [
+      'sh', '-c', `node ${entry}`
+    ],
+    installDependencies: async (container, options) => {
+      // When a package.json exists we run a full install. Otherwise we add the listed dependencies directly.
+      const deps = (options.dependencies ?? []).join(' ');
+      // npm is always present in the Node image – yarn may not be.
+      const cmd = `if [ -f package.json ]; then \
+          (command -v yarn >/dev/null 2>&1 && yarn install --ignore-scripts --non-interactive || npm install --no-audit --no-fund); \
+        elif [ ! -z \"${deps}\" ]; then \
+          npm init -y >/dev/null 2>&1 && npm install --no-audit --no-fund ${deps}; \
+        fi`;
+      const exec = await container.exec({ Cmd: ['sh', '-c', cmd], AttachStdout: true, AttachStderr: true, WorkingDir: options.runApp?.cwd || '/workspace' });
+      const stream = await exec.start({ hijack: true, stdin: false });
+      let out = '';
+      let err = '';
+      await new Promise<void>(resolve => {
+        container.modem.demuxStream(stream as Duplex,
+          { write: (c: Buffer) => { out += c.toString(); } },
+          { write: (c: Buffer) => { err += c.toString(); } }
+        );
+        stream.on('end', resolve);
+      });
+      const info = await exec.inspect();
+      return { stdout: out, stderr: err, exitCode: typeof info.ExitCode === 'number' ? info.ExitCode : 1 };
+    }
   },
   {
     language: 'typescript',
     defaultImage: 'node:18-alpine',
     codeFilename: 'code.ts',
     prepareFiles: (options, dir) => jsTsPrepare(options, dir, 'code.ts'),
-    buildInlineCommand: (depsInstalled) => [
-      'sh', '-c', `${depsInstalled ? '' : 'yarn install && '}npx ts-node code.ts`
+    buildInlineCommand: (_depsInstalled: boolean) => [
+      'sh', '-c', 'npx ts-node code.ts'
     ],
-    buildRunAppCommand: (entry, depsInstalled) => [
-      'sh', '-c', `${depsInstalled ? '' : 'yarn install && '}npx ts-node ${entry}`
-    ]
+    buildRunAppCommand: (entry, _depsInstalled: boolean) => [
+      'sh', '-c', `npx ts-node ${entry}`
+    ],
+    installDependencies: async (container, options) => {
+      const deps = (options.dependencies ?? []).join(' ');
+      const cmd = `if [ -f package.json ]; then \
+          (command -v yarn >/dev/null 2>&1 && yarn install --ignore-scripts --non-interactive || npm install --no-audit --no-fund); \
+        elif [ ! -z \"${deps}\" ]; then \
+          npm init -y >/dev/null 2>&1 && npm install --no-audit --no-fund ${deps}; \
+        fi`;
+      const exec = await container.exec({ Cmd: ['sh', '-c', cmd], AttachStdout: true, AttachStderr: true, WorkingDir: options.runApp?.cwd || '/workspace' });
+      const stream = await exec.start({ hijack: true, stdin: false });
+      let out = '';
+      let err = '';
+      await new Promise<void>(resolve => {
+        container.modem.demuxStream(stream as Duplex,
+          { write: (c: Buffer) => { out += c.toString(); } },
+          { write: (c: Buffer) => { err += c.toString(); } }
+        );
+        stream.on('end', resolve);
+      });
+      const info = await exec.inspect();
+      return { stdout: out, stderr: err, exitCode: typeof info.ExitCode === 'number' ? info.ExitCode : 1 };
+    }
   },
   {
     language: 'python',
@@ -83,12 +127,28 @@ export const defaultLanguageConfigs: LanguageConfig[] = [
         fs.writeFileSync(path.join(dir, 'requirements.txt'), options.dependencies.join('\n'));
       }
     },
-    buildInlineCommand: (depsInstalled) => [
-      'sh', '-c', `${depsInstalled ? '' : 'if [ -f requirements.txt ]; then pip install -r requirements.txt 2>/dev/null; fi && '}py=$(command -v python3 || command -v python) && $py -u code.py`
+    buildInlineCommand: (_depsInstalled: boolean) => [
+      'sh', '-c', 'py=$(command -v python3 || command -v python) && $py -u code.py'
     ],
-    buildRunAppCommand: (entry, depsInstalled) => [
-      'sh', '-c', `${depsInstalled ? '' : 'if [ -f requirements.txt ]; then pip install -r requirements.txt 2>/dev/null; fi && '}py=$(command -v python3 || command -v python) && $py -u ${entry}`
-    ]
+    buildRunAppCommand: (entry, _depsInstalled: boolean) => [
+      'sh', '-c', `py=$(command -v python3 || command -v python) && $py -u ${entry}`
+    ],
+    installDependencies: async (container, options) => {
+      const cmd = 'if [ -f requirements.txt ]; then pip install -r requirements.txt; fi';
+      const exec = await container.exec({ Cmd: ['sh', '-c', cmd], AttachStdout: true, AttachStderr: true, WorkingDir: options.runApp?.cwd || '/workspace' });
+      const stream = await exec.start({ hijack: true, stdin: false });
+      let out = '';
+      let err = '';
+      await new Promise<void>(resolve => {
+        container.modem.demuxStream(stream as Duplex,
+          { write: (c: Buffer) => { out += c.toString(); } },
+          { write: (c: Buffer) => { err += c.toString(); } }
+        );
+        stream.on('end', resolve);
+      });
+      const info = await exec.inspect();
+      return { stdout: out, stderr: err, exitCode: typeof info.ExitCode === 'number' ? info.ExitCode : 1 };
+    }
   },
   {
     language: 'shell',
@@ -102,13 +162,16 @@ export const defaultLanguageConfigs: LanguageConfig[] = [
     buildInlineCommand: () => ['sh', '-c', './code.sh'],
     buildRunAppCommand: (entry) => ['sh', '-c', `chmod +x ${entry} && ./${entry}`],
     installDependencies: async (container, options) => {
-      if (!options.dependencies || options.dependencies.length === 0) return;
+      if (!options.dependencies || options.dependencies.length === 0) {
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
 
       // Update Alpine package repository
       const updateExec = await container.exec({
         Cmd: ['sh', '-c', 'apk update'],
         AttachStdout: true,
-        AttachStderr: true
+        AttachStderr: true,
+        WorkingDir: options.runApp?.cwd || '/workspace'
       });
       let updateOutput = '';
       const updateStream = await updateExec.start({ hijack: true, stdin: false });
@@ -132,7 +195,7 @@ export const defaultLanguageConfigs: LanguageConfig[] = [
       });
       const updateInfo = await updateExec.inspect();
       if (updateInfo.ExitCode !== 0) {
-        throw new Error(`Failed to update Alpine package repository: ${updateOutput}`);
+        return { stdout: updateOutput, stderr: '', exitCode: typeof updateInfo.ExitCode === 'number' ? updateInfo.ExitCode : 1 };
       }
 
       // Install requested packages
@@ -140,7 +203,8 @@ export const defaultLanguageConfigs: LanguageConfig[] = [
       const installExec = await container.exec({
         Cmd: ['sh', '-c', installCmd],
         AttachStdout: true,
-        AttachStderr: true
+        AttachStderr: true,
+        WorkingDir: options.runApp?.cwd || '/workspace'
       });
       let installOutput = '';
       const installStream = await installExec.start({ hijack: true, stdin: false });
@@ -163,9 +227,7 @@ export const defaultLanguageConfigs: LanguageConfig[] = [
         installStream.on('end', resolve);
       });
       const installInfo = await installExec.inspect();
-      if (installInfo.ExitCode !== 0) {
-        throw new Error(`Failed to install Alpine packages: ${options.dependencies.join(', ')}\nOutput: ${installOutput}`);
-      }
+      return { stdout: installOutput, stderr: '', exitCode: typeof installInfo.ExitCode === 'number' ? installInfo.ExitCode : 1 };
     }
   }
 ];

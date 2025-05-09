@@ -43,12 +43,14 @@ class SessionManager {
   private sessionContainers: Map<string, Docker.Container | undefined>;
   private containerMeta: Map<string, ContainerMeta>;
   private sessionContainerHistory: Map<string, ContainerMeta[]>;
+  private idleContainers: Map<string, Docker.Container[]>;
 
   constructor() {
     this.sessionConfigs = new Map();
     this.sessionContainers = new Map();
     this.containerMeta = new Map();
     this.sessionContainerHistory = new Map();
+    this.idleContainers = new Map();
   }
 
   getSessionConfig(sessionId: string): SessionConfig | undefined {
@@ -124,6 +126,37 @@ class SessionManager {
       }
     }
   }
+
+  addIdleContainer(sessionId: string, container: Docker.Container): void {
+    const idleContainers = this.idleContainers.get(sessionId) || [];
+    idleContainers.push(container);
+    this.idleContainers.set(sessionId, idleContainers);
+  }
+
+  getIdleContainer(sessionId: string, image: string): Docker.Container | undefined {
+    const idleContainers = this.idleContainers.get(sessionId) || [];
+    for (const cont of idleContainers) {
+      const meta = this.containerMeta.get(cont.id);
+      if (meta && meta.imageName === image) {
+        return cont;
+      }
+    }
+    return undefined;
+  }
+
+  removeIdleContainer(sessionId: string, container: Docker.Container): void {
+    const idleContainers = this.idleContainers.get(sessionId) || [];
+    const filtered = idleContainers.filter(c => c.id !== container.id);
+    this.idleContainers.set(sessionId, filtered);
+  }
+
+  getIdleContainers(sessionId: string): Docker.Container[] {
+    return this.idleContainers.get(sessionId) || [];
+  }
+
+  clearIdleContainers(sessionId: string): void {
+    this.idleContainers.delete(sessionId);
+  }
 }
 
 export class ExecutionEngine {
@@ -166,7 +199,6 @@ export class ExecutionEngine {
     }
 
     this.logDebug('Source code:\n', options.code);
-
     langCfg.prepareFiles(options, tempDir);
   }
 
@@ -185,6 +217,10 @@ export class ExecutionEngine {
     const startTime = Date.now();
     let command: string[];
     let workingDir = '/workspace';
+
+    // Collect dependency installation output if we need to surface it later
+    let dependencyStdout = '';
+    let dependencyStderr = '';
 
     await this.sessionManager.updateContainerState(container.id, true);
 
@@ -227,8 +263,12 @@ export class ExecutionEngine {
       const newDepsChecksum = this.calculateDepsChecksum(options.dependencies);
       const depsAlreadyInstalled = Boolean(meta?.depsInstalled && meta?.depsChecksum === newDepsChecksum);
 
-      // Save current baseline before execution
+      // Track if dependencies installed successfully (starts with previous status)
+      let depsInstallationSucceededGlobal = depsAlreadyInstalled;
+
+      // Save current baseline before execution (this must happen *before* we start executing)
       if (meta) {
+        meta.workspaceDir = codePath; // keep metadata consistent in case the container was reused
         meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
       }
 
@@ -251,7 +291,39 @@ export class ExecutionEngine {
           throw new Error(`Unsupported language: ${options.language}`);
         }
 
-        command = langCfgRunApp.buildRunAppCommand(options.runApp.entryFile, depsAlreadyInstalled);
+        // ----- Dependency installation phase (runs only when they have not been installed yet and before runApp command) -----
+        let depOut = '';
+        let depErr = '';
+
+        if (!depsAlreadyInstalled) {
+          this.logDebug('Installing dependencies', options.dependencies);
+
+          if (langCfgRunApp.installDependencies) {
+            const { stdout: o, stderr: e, exitCode } = await langCfgRunApp.installDependencies(container, options);
+            depOut = o;
+            depErr = e;
+            dependencyStdout = o;
+            dependencyStderr = e;
+
+            this.logDebug('Dependency installation stdout:', depOut);
+            this.logDebug('Dependency installation stderr:', depErr);
+
+            if (exitCode !== 0) {
+              // Surface dependency installation output streams if provided
+              if (options.streamOutput?.dependencyStdout && depOut) options.streamOutput.dependencyStdout(depOut);
+              if (options.streamOutput?.dependencyStderr && depErr) options.streamOutput.dependencyStderr(depErr);
+            } else {
+              depsInstallationSucceededGlobal = true;
+              // After successful dependency installation, refresh baseline so dependency files are not treated as generated
+              if (meta) {
+                meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
+              }
+            }
+          }
+        }
+
+        // Build command using LanguageRegistry (all languages)
+        command = langCfgRunApp.buildRunAppCommand(options.runApp.entryFile, depsInstallationSucceededGlobal);
       } else {
         // Write code directly to workspace
         // Determine the correct filename based on language
@@ -303,14 +375,65 @@ EOL`],
           });
         }
 
-        this.logDebug('Installing dependencies', options.dependencies);
-        // If the language defines a dependency installation step, run it first.
-        if (langCfgInline.installDependencies && !depsAlreadyInstalled) {
-          await langCfgInline.installDependencies(container, options);
+        // ----- Dependency installation phase (runs only when they have not been installed yet) -----
+        let depOut = '';
+        let depErr = '';
+
+        if (!depsAlreadyInstalled) {
+          this.logDebug('Installing dependencies', options.dependencies);
+
+          const runAndCapture = async (cmd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
+            const exec = await container.exec({ Cmd: ['sh', '-c', cmd], AttachStdout: true, AttachStderr: true });
+            const stream = await exec.start({ hijack: true, stdin: false });
+            let stdout = '';
+            let stderr = '';
+            await new Promise<void>((resolve) => {
+              container.modem.demuxStream(stream as Duplex,
+                {
+                  write: (chunk: Buffer) => { stdout += chunk.toString(); }
+                },
+                {
+                  write: (chunk: Buffer) => { stderr += chunk.toString(); }
+                });
+              stream.on('end', resolve);
+            });
+            const info = await exec.inspect();
+            return { stdout, stderr, exitCode: info.ExitCode ?? 1 };
+          };
+
+          if (langCfgInline.installDependencies) {
+            const { stdout: o, stderr: e, exitCode } = await langCfgInline.installDependencies(container, options);
+            depOut = o;
+            depErr = e;
+            dependencyStdout = o;
+            dependencyStderr = e;
+
+            this.logDebug('Dependency installation stdout:', depOut);
+            this.logDebug('Dependency installation stderr:', depErr);
+
+            if (exitCode !== 0) {
+              // Surface dependency installation output streams if provided
+              if (options.streamOutput?.dependencyStdout && depOut) options.streamOutput.dependencyStdout(depOut);
+              if (options.streamOutput?.dependencyStderr && depErr) options.streamOutput.dependencyStderr(depErr);
+            } else {
+              depsInstallationSucceededGlobal = true;
+              // After successful dependency installation, refresh baseline so dependency files are not treated as generated
+              if (meta) {
+                meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
+              }
+            }
+          } else {
+            // No installer; mark success
+            depsInstallationSucceededGlobal = true;
+            // Refresh baseline when dependencies considered successfully installed (even if no installer) to ensure subsequent file tracking is accurate
+            if (meta) {
+              meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
+            }
+          }
         }
 
         // Build command using LanguageRegistry (all languages)
-        command = langCfgInline.buildInlineCommand(depsAlreadyInstalled);
+        command = langCfgInline.buildInlineCommand(depsInstallationSucceededGlobal);
       }
 
       this.logDebug('Executing command:', command.join(' '));
@@ -362,8 +485,8 @@ EOL`],
             stream.on('end', async () => {
               try {
                 const info = await exec.inspect();
-                // Update dependency installation status and checksum
-                if (!depsAlreadyInstalled && meta) {
+                // Update dependency installation status and checksum when they were successfully installed during this run
+                if (!depsAlreadyInstalled && depsInstallationSucceededGlobal && meta) {
                   meta.depsInstalled = true;
                   meta.depsChecksum = newDepsChecksum;
                 }
@@ -385,8 +508,10 @@ EOL`],
                 }
 
                 const result: ExecutionResult = {
-                  stdout,
-                  stderr,
+                  stdout: stdout,
+                  stderr: stderr,
+                  dependencyStdout: dependencyStdout,
+                  dependencyStderr: dependencyStderr,
                   exitCode: info.ExitCode || 1,
                   executionTime: Date.now() - startTime,
                   workspaceDir: codePath,
@@ -478,8 +603,9 @@ EOL`],
     config: SessionConfig
   ): Promise<void> {
     const meta = this.sessionManager.getContainerMeta(container.id);
-    if (meta && meta.baselineFiles.size === 0) {
+    if (meta) {
       await this.prepareCodeFile(options, codePath);
+      meta.workspaceDir = codePath;
       meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
     }
   }
@@ -492,8 +618,12 @@ EOL`],
     }
 
     // Guard: POOL strategy does not support shared workspaces
-    if (config.strategy === ContainerStrategy.POOL && options.workspaceSharing === 'shared') {
-      throw new Error('workspaceSharing "shared" is not supported with ContainerStrategy.POOL; workspace is always cleared between executions. Use PER_SESSION if you need a persistent workspace.');
+    if (options.workspaceSharing === 'shared') {
+      const unsupportedStrategies = new Set([ContainerStrategy.POOL, ContainerStrategy.PER_EXECUTION]);
+      if (unsupportedStrategies.has(config.strategy)) {
+        throw new Error(`workspaceSharing "shared" is not supported with ContainerStrategy.${config.strategy}. ` +
+          `Use PER_SESSION for a persistent workspace.`);
+      }
     }
 
     let codePath: string = '';
@@ -530,10 +660,9 @@ EOL`],
       switch (config.strategy) {
         case ContainerStrategy.PER_EXECUTION: {
           const containerName = `it_${uuidv4()}`;
-          codePath = useSharedWorkspace ? sharedWorkspacePath! : tempPathForContainer(containerName);
-          if (!useSharedWorkspace) {
-            await this.prepareCodeFile(options, codePath);
-          }
+          codePath = tempPathForContainer(containerName);
+          await this.prepareCodeFile(options, codePath);
+
           const { container: newContainer, meta } = await this.createNewContainer(config, expectedImage, codePath);
           container = newContainer;
           this.sessionManager.setContainer(sessionId, container);
@@ -545,7 +674,7 @@ EOL`],
           let sessionContainer = this.sessionManager.getContainer(sessionId);
           
           if (sessionContainer) {
-            if (await this.handleContainerImageMismatch(sessionContainer, expectedImage, sessionId, useSharedWorkspace)) {
+            if (await this.handleContainerImageMismatch(sessionContainer, expectedImage, sessionId, false)) {
               sessionContainer = undefined;
             }
           }
@@ -554,10 +683,8 @@ EOL`],
             const pooledContainer = await this.containerManager.getContainerFromPool(expectedImage);
             if (!pooledContainer) {
               const containerName = `it_${uuidv4()}`;
-              codePath = useSharedWorkspace ? sharedWorkspacePath! : tempPathForContainer(containerName);
-              if (!useSharedWorkspace) {
-                await this.prepareCodeFile(options, codePath);
-              }
+              codePath =  tempPathForContainer(containerName);
+              //await this.prepareCodeFile(options, codePath);
               const { container: newContainer, meta } = await this.createNewContainer(config, expectedImage, codePath);
               sessionContainer = newContainer;
               this.sessionManager.setContainerMeta(sessionContainer.id, meta);
@@ -593,9 +720,35 @@ EOL`],
         case ContainerStrategy.PER_SESSION: {
           let sessionContainer = this.sessionManager.getContainer(sessionId);
           
-          if (sessionContainer) {
-            if (await this.handleContainerImageMismatch(sessionContainer, expectedImage, sessionId, useSharedWorkspace)) {
-              sessionContainer = undefined;
+          if (useSharedWorkspace) {
+            // Shared workspace: keep mismatched containers for potential reuse later
+            if (sessionContainer) {
+              const info = await sessionContainer.inspect();
+              if (info.Config.Image !== expectedImage) {
+                // Stop and store current container for future reuse
+                try { await sessionContainer.stop(); } catch {}
+                this.sessionManager.addIdleContainer(sessionId, sessionContainer);
+                sessionContainer = undefined;
+              }
+            }
+
+            // Try to find an idle container with the expected image
+            if (!sessionContainer) {
+              const idle = this.sessionManager.getIdleContainer(sessionId, expectedImage);
+              if (idle) {
+                sessionContainer = idle;
+                await this.ensureContainerRunning(sessionContainer);
+                // remove from idle list
+                this.sessionManager.removeIdleContainer(sessionId, idle);
+                this.sessionManager.setContainer(sessionId, sessionContainer);
+              }
+            }
+          } else {
+            // Non-shared workspace: old mismatch logic
+            if (sessionContainer) {
+              if (await this.handleContainerImageMismatch(sessionContainer, expectedImage, sessionId, false)) {
+                sessionContainer = undefined;
+              }
             }
           }
 
@@ -641,7 +794,7 @@ EOL`],
       }
 
       // For PER_SESSION strategy prepare workspace only on first execution
-      if (config.strategy === ContainerStrategy.PER_SESSION) {
+      if (config.strategy === ContainerStrategy.PER_SESSION || config.strategy === ContainerStrategy.POOL) {
         await this.prepareWorkspace(container, codePath, options, config);
       }
 
@@ -686,6 +839,13 @@ EOL`],
       }
       this.sessionManager.deleteSession(sessionId);
     }
+
+    // Remove any idle containers kept for this session
+    const idleList = this.sessionManager.getIdleContainers(sessionId);
+    for (const idle of idleList) {
+      await this.containerManager.removeContainerAndDir(idle, !keepGeneratedFiles);
+    }
+    this.sessionManager.clearIdleContainers(sessionId);
   }
 
   async cleanup(keepGeneratedFiles: boolean = false): Promise<void> {
@@ -882,5 +1042,14 @@ EOL`],
     }
 
     return sessionId;
+  }
+
+  private async ensureContainerRunning(container: Docker.Container): Promise<void> {
+    try {
+      const info = await container.inspect();
+      if (!info.State.Running) {
+        await container.start();
+      }
+    } catch {}
   }
 } 
