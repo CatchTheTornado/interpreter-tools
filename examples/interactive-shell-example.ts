@@ -35,7 +35,7 @@ async function main() {
   const { codeExecutionTool, executionEngine } = createCodeExecutionTool({
     defaultStrategy: 'per_session',
     sessionId,
-    verbosity: 'debug',
+    verbosity: 'info',
     workspaceSharing: 'shared'
   });
 

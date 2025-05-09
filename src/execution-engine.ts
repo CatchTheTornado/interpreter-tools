@@ -38,7 +38,7 @@ interface SessionInfo {
 
 class SessionManager {
   private sessionConfigs: Map<string, SessionConfig>;
-  private sessionContainers: Map<string, Docker.Container>;
+  private sessionContainers: Map<string, Docker.Container | undefined>;
   private containerMeta: Map<string, ContainerMeta>;
   private sessionContainerHistory: Map<string, ContainerMeta[]>;
 
@@ -65,8 +65,12 @@ class SessionManager {
     this.sessionConfigs.set(sessionId, config);
   }
 
-  setContainer(sessionId: string, container: Docker.Container): void {
-    this.sessionContainers.set(sessionId, container);
+  setContainer(sessionId: string, container: Docker.Container | undefined): void {
+    if (container) {
+      this.sessionContainers.set(sessionId, container);
+    } else {
+      this.sessionContainers.delete(sessionId);
+    }
   }
 
   setContainerMeta(containerId: string, meta: ContainerMeta): void {
@@ -444,13 +448,17 @@ EOL`],
   private async handleContainerImageMismatch(
     container: Docker.Container,
     expectedImage: string,
-    sessionId: string
+    sessionId: string,
+    useSharedWorkspace: boolean
   ): Promise<boolean> {
     const containerInfo = await container.inspect();
     if (containerInfo.Config.Image !== expectedImage) {
       this.logDebug('Container image mismatch, removing container');
-      await this.containerManager.removeContainerAndDir(container);
-      this.sessionManager.deleteSession(sessionId);
+      // First remove the container but keep workspace if shared
+      await this.containerManager.removeContainerAndDir(container, !useSharedWorkspace);
+      // Then clear the session container reference
+      this.sessionManager.setContainer(sessionId, undefined);
+      // Don't delete the session itself as we'll create a new container
       return true;
     }
     return false;
@@ -470,6 +478,7 @@ EOL`],
   }
 
   async executeCode(sessionId: string, options: ExecutionOptions): Promise<ExecutionResult> {
+    this.logDebug('Executing code', sessionId, options);
     const config = this.sessionManager.getSessionConfig(sessionId);
     if (!config) {
       throw new Error('Invalid session ID');
@@ -480,7 +489,7 @@ EOL`],
 
     try {
       // Get the expected image for this execution
-      const expectedImage = config.containerConfig.image ? config.containerConfig.image : this.getContainerImage(options.language);
+      const expectedImage = this.getContainerImage(options.language) || config.containerConfig.image;
 
       // Determine if we should use a shared workspace
       const useSharedWorkspace = options.workspaceSharing === 'shared';
@@ -524,7 +533,7 @@ EOL`],
           let sessionContainer = this.sessionManager.getContainer(sessionId);
           
           if (sessionContainer) {
-            if (await this.handleContainerImageMismatch(sessionContainer, expectedImage, sessionId)) {
+            if (await this.handleContainerImageMismatch(sessionContainer, expectedImage, sessionId, useSharedWorkspace)) {
               sessionContainer = undefined;
             }
           }
@@ -571,12 +580,13 @@ EOL`],
           let sessionContainer = this.sessionManager.getContainer(sessionId);
           
           if (sessionContainer) {
-            if (await this.handleContainerImageMismatch(sessionContainer, expectedImage, sessionId)) {
+            if (await this.handleContainerImageMismatch(sessionContainer, expectedImage, sessionId, useSharedWorkspace)) {
               sessionContainer = undefined;
             }
           }
 
           if (!sessionContainer) {
+            this.logDebug('Creating new container for per session strategy', sessionId, expectedImage);
             const containerName = `it_${uuidv4()}`;
             const codeDir = useSharedWorkspace ? sharedWorkspacePath! : tempPathForContainer(containerName);
             if (!useSharedWorkspace) {
