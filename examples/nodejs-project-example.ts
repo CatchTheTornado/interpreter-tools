@@ -71,7 +71,7 @@ Separate each file with a blank line.`
       }]
     });
 
-    executionEngine.setVerbosity('debug');
+    executionEngine.setVerbosity('info');
     console.log('Executing project...');
     
     // Execute the project using codeExecutionTool
