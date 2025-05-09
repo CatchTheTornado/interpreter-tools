@@ -199,7 +199,6 @@ export class ExecutionEngine {
     }
 
     this.logDebug('Source code:\n', options.code);
-
     langCfg.prepareFiles(options, tempDir);
   }
 
@@ -511,7 +510,7 @@ EOL`],
     config: SessionConfig
   ): Promise<void> {
     const meta = this.sessionManager.getContainerMeta(container.id);
-    if (meta && meta.baselineFiles.size === 0) {
+    if (meta) {
       await this.prepareCodeFile(options, codePath);
       meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
     }
