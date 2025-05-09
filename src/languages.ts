@@ -54,15 +54,21 @@ export const defaultLanguageConfigs: LanguageConfig[] = [
     defaultImage: 'node:18-alpine',
     codeFilename: 'code.js',
     prepareFiles: (options, dir) => jsTsPrepare(options, dir, 'code.js'),
-    buildInlineCommand: (depsInstalled) => [
-      'sh', '-c', `node code.js`
+    buildInlineCommand: (_depsInstalled) => [
+      'sh', '-c', 'node code.js'
     ],
-    buildRunAppCommand: (entry, depsInstalled) => [
+    buildRunAppCommand: (entry, _depsInstalled) => [
       'sh', '-c', `node ${entry}`
     ],
     installDependencies: async (container, options) => {
-      // Install NPM/Yarn dependencies inside container when package.json exists
-      const cmd = 'if [ -f package.json ]; then yarn install --ignore-scripts --non-interactive || npm install --no-audit --no-fund; fi';
+      // When a package.json exists we run a full install. Otherwise we add the listed dependencies directly.
+      const deps = (options.dependencies ?? []).join(' ');
+      // npm is always present in the Node image – yarn may not be.
+      const cmd = `if [ -f package.json ]; then \
+          (command -v yarn >/dev/null 2>&1 && yarn install --ignore-scripts --non-interactive || npm install --no-audit --no-fund); \
+        elif [ ! -z \"${deps}\" ]; then \
+          npm init -y >/dev/null 2>&1 && npm install --no-audit --no-fund ${deps}; \
+        fi`;
       const exec = await container.exec({ Cmd: ['sh', '-c', cmd], AttachStdout: true, AttachStderr: true });
       const stream = await exec.start({ hijack: true, stdin: false });
       let out = '';
@@ -90,8 +96,12 @@ export const defaultLanguageConfigs: LanguageConfig[] = [
       'sh', '-c', `npx ts-node ${entry}`
     ],
     installDependencies: async (container, options) => {
-      // Install NPM/Yarn dependencies inside container when package.json exists
-      const cmd = 'if [ -f package.json ]; then yarn install --ignore-scripts --non-interactive || npm install --no-audit --no-fund; fi';
+      const deps = (options.dependencies ?? []).join(' ');
+      const cmd = `if [ -f package.json ]; then \
+          (command -v yarn >/dev/null 2>&1 && yarn install --ignore-scripts --non-interactive || npm install --no-audit --no-fund); \
+        elif [ ! -z \"${deps}\" ]; then \
+          npm init -y >/dev/null 2>&1 && npm install --no-audit --no-fund ${deps}; \
+        fi`;
       const exec = await container.exec({ Cmd: ['sh', '-c', cmd], AttachStdout: true, AttachStderr: true });
       const stream = await exec.start({ hijack: true, stdin: false });
       let out = '';
