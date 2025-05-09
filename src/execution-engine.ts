@@ -23,6 +23,19 @@ interface ContainerMeta {
   containerId: string;
 }
 
+interface SessionInfo {
+  sessionId: string;
+  config: SessionConfig;
+  currentContainer: {
+    container: Docker.Container | undefined;
+    meta: ContainerMeta | undefined;
+  };
+  containerHistory: ContainerMeta[];
+  createdAt: Date;
+  lastExecutedAt: Date | null;
+  isActive: boolean;
+}
+
 class SessionManager {
   private sessionConfigs: Map<string, SessionConfig>;
   private sessionContainers: Map<string, Docker.Container>;
@@ -775,5 +788,43 @@ EOL`],
     if (!container) throw new Error('Session not found');
     const workspaceDir = this.getWorkspaceDir(container);
     return fs.readFileSync(path.join(workspaceDir, relativePath));
+  }
+
+  async getSessionInfo(sessionId: string): Promise<SessionInfo> {
+    const config = this.sessionManager.getSessionConfig(sessionId);
+    if (!config) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    const container = this.sessionManager.getContainer(sessionId);
+    const containerMeta = container ? this.sessionManager.getContainerMeta(container.id) : undefined;
+    const containerHistory = this.sessionManager.getSessionContainerHistory(sessionId);
+
+    // Calculate session-level timestamps
+    const createdAt = containerHistory.length > 0 
+      ? containerHistory[0].createdAt 
+      : new Date();
+    
+    const lastExecutedAt = containerHistory.length > 0
+      ? containerHistory.reduce((latest, meta) => {
+          if (!meta.lastExecutedAt) return latest;
+          return !latest || meta.lastExecutedAt > latest 
+            ? meta.lastExecutedAt 
+            : latest;
+        }, null as Date | null)
+      : null;
+
+    return {
+      sessionId,
+      config,
+      currentContainer: {
+        container,
+        meta: containerMeta
+      },
+      containerHistory,
+      createdAt,
+      lastExecutedAt,
+      isActive: Boolean(container && containerMeta?.isRunning)
+    };
   }
 } 

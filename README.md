@@ -375,8 +375,9 @@ Average times on a MacBook M2 Pro: **JS 40 ms / round**, **Python 60 ms / round*
 The main components of this project are:
 
 1. `ExecutionEngine`: Manages code execution in containers
-2. `ContainerManager`: Handles Docker container lifecycle
-3. `CodeExecutionTool`: Provides a high-level interface for executing code
+2. `SessionManager`: Manages session state, container metadata, and container history across executions
+3. `ContainerManager`: Handles Docker container lifecycle
+4. `CodeExecutionTool`: Provides a high-level interface for executing code
 
 ### Basic Usage
 
@@ -399,11 +400,12 @@ const result = await codeExecutionTool.execute({
 
 ### Architecture Overview
 
-Interpreter Tools is composed of three core layers:
+Interpreter Tools is composed of four core layers:
 
 | Layer | Responsibility |
 |-------|---------------|
 | **ExecutionEngine** | High-level façade that orchestrates container lifecycle, dependency caching, and code execution. |
+| **SessionManager** | Manages session state, container metadata, and container history across executions. |
 | **ContainerManager** | Low-level wrapper around Dockerode that creates, starts, pools, and cleans containers. |
 | **LanguageRegistry** | Pluggable store of `LanguageConfig` objects that describe how to build/run code for each language. |
 
@@ -413,12 +415,13 @@ All user-facing helpers (e.g. the `codeExecutionTool` for AI agents) are thin wr
 graph TD;
   subgraph Runtime
     A[ExecutionEngine]
-    B[ContainerManager]
-    C[Docker]
+    B[SessionManager]
+    C[ContainerManager]
+    D[Docker]
   end
-  D[LanguageRegistry]
-  A --> B --> C
-  A --> D
+  E[LanguageRegistry]
+  A --> B --> C --> D
+  A --> E
 ```
 
 ---
@@ -434,11 +437,54 @@ createSession(config: SessionConfig): Promise<string>
 executeCode(sessionId: string, options: ExecutionOptions): Promise<ExecutionResult>
 cleanupSession(sessionId: string): Promise<void>
 cleanup(): Promise<void>
+getSessionInfo(sessionId: string): Promise<SessionInfo>
 ```
 
 * **SessionConfig** – chooses a `ContainerStrategy` (`PER_EXECUTION`, `POOL`, `PER_SESSION`) and passes a `containerConfig` (image, env, mounts, limits).
 * **ExecutionOptions** – language, code snippet, optional dependencies, stream handlers, etc.
 * **ExecutionResult** – `{ stdout, stderr, exitCode, executionTime }`.
+* **SessionInfo** – comprehensive session information including:
+  ```typescript
+  interface SessionInfo {
+    sessionId: string;
+    config: SessionConfig;
+    currentContainer: {
+      container: Docker.Container | undefined;
+      meta: ContainerMeta | undefined;
+    };
+    containerHistory: ContainerMeta[];
+    createdAt: Date;
+    lastExecutedAt: Date | null;
+    isActive: boolean;
+  }
+  ```
+
+#### Container Metadata
+
+Each container's state is tracked through the `ContainerMeta` interface:
+
+```typescript
+interface ContainerMeta {
+  sessionId: string;
+  depsInstalled: boolean;
+  depsChecksum: string | null;
+  baselineFiles: Set<string>;
+  workspaceDir: string;
+  generatedFiles: Set<string>;
+  sessionGeneratedFiles: Set<string>;
+  isRunning: boolean;
+  createdAt: Date;
+  lastExecutedAt: Date | null;
+  containerId: string;
+}
+```
+
+This metadata provides:
+- Dependency installation status and checksums
+- File tracking (baseline, generated, session-generated)
+- Container state (running/stopped)
+- Timestamps (creation, last execution)
+- Container identification
 
 #### `createCodeExecutionTool()`
 
