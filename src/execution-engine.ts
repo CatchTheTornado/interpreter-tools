@@ -381,8 +381,8 @@ EOL`],
 
             if (exitCode !== 0) {
               // issues encountered: stream outputs
-              if (options.streamOutput?.stdout && depOut) options.streamOutput.stdout(depOut);
-              if (options.streamOutput?.stderr && depErr) options.streamOutput.stderr(depErr);
+              if (options.streamOutput?.dependencyStdout && depOut) options.streamOutput.dependencyStdout(depOut);
+              if (options.streamOutput?.dependencyStderr && depErr) options.streamOutput.dependencyStderr(depErr);
             } else {
               depsInstallationSucceededGlobal = true;
             }
@@ -468,8 +468,10 @@ EOL`],
                 }
 
                 const result: ExecutionResult = {
-                  stdout: dependencyStdout + stdout,
-                  stderr: dependencyStderr + stderr,
+                  stdout: stdout,
+                  stderr: stderr,
+                  dependencyStdout: dependencyStdout,
+                  dependencyStderr: dependencyStderr,
                   exitCode: info.ExitCode || 1,
                   executionTime: Date.now() - startTime,
                   workspaceDir: codePath,

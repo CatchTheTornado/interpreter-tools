@@ -562,7 +562,8 @@ getSessionInfo(sessionId: string): Promise<SessionInfo>
 
 * **SessionConfig** – chooses a `ContainerStrategy` (`PER_EXECUTION`, `POOL`, `PER_SESSION`) and passes a `containerConfig` (image, env, mounts, limits).
 * **ExecutionOptions** – language, code snippet, optional dependencies, stream handlers, etc.
-* **ExecutionResult** – `{ stdout, stderr, exitCode, executionTime }`.
+* **ExecutionResult** – `{ stdout, stderr, dependencyStdout, dependencyStderr, exitCode, executionTime }`.  
+  `dependencyStdout` and `dependencyStderr` capture any output produced while installing the declared `dependencies` (e.g. `npm`, `pip`, `apk`) _before_ your code starts executing. They are empty when no dependency phase was required.
 * **SessionInfo** – comprehensive session information including:
   ```typescript
   interface SessionInfo {
@@ -709,7 +710,7 @@ Under the hood the engine calls `container.update({ CpuPeriod, CpuQuota, Memory 
 
 ### Streaming Output
 
-Pass `streamOutput: { stdout?, stderr? }` in `ExecutionOptions` to receive data chunks in real time while the process runs.
+Pass `streamOutput: { stdout?, stderr?, dependencyStdout?, dependencyStderr? }` in `ExecutionOptions` to receive data chunks in real time while the process runs.
 
 ```typescript
 await engine.executeCode(id, {
@@ -720,6 +721,8 @@ await engine.executeCode(id, {
   }
 });
 ```
+
+`dependencyStdout` / `dependencyStderr` fire **during the dependency-installation phase** (e.g. when `pip install` or `npm install` runs) _before_ the user code starts. This lets you surface progress logs or errors related to package installation separately from your program's own output.
 
 ---
 

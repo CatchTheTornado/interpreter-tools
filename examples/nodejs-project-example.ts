@@ -82,6 +82,13 @@ Separate each file with a blank line.`
       },
       dependencies: ['express'],
       streamOutput: {
+        dependencyStdout: (data) => {
+          console.log('Dependency stdout:', data);
+        },
+        dependencyStderr: (data) => {
+          console.error('Dependency stderr:', data);
+        },
+
         stdout: (data) => {
           console.log('Container stdout:', data);
         },

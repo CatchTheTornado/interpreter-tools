@@ -15,6 +15,8 @@ export interface ExecutionOptions {
   streamOutput?: {
     stdout?: (data: string) => void;
     stderr?: (data: string) => void;
+    dependencyStdout?: (data: string) => void;
+    dependencyStderr?: (data: string) => void;
   };
   workspaceSharing?: 'isolated' | 'shared';  // New option: 'isolated' (default) or 'shared'
 }
@@ -35,6 +37,8 @@ export interface ContainerConfig {
 export interface ExecutionResult {
   stdout: string;
   stderr: string;
+  dependencyStdout: string;
+  dependencyStderr: string;
   exitCode: number;
   executionTime: number;
   workspaceDir: string;

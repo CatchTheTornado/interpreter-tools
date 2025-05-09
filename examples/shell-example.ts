@@ -24,6 +24,12 @@ curl -s https://example.com
 echo "\\nDone!"`,
       dependencies: ['curl'],
       streamOutput: {
+        dependencyStdout: (data) => {
+          console.log('Dependency stdout:', data);
+        },
+        dependencyStderr: (data) => {
+          console.error('Dependency stderr:', data);
+        },        
         stdout: (data) => {
           console.log('Container stdout:', data);
         },
