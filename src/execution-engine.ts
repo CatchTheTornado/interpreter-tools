@@ -17,17 +17,23 @@ interface ContainerMeta {
   workspaceDir: string;
   generatedFiles: Set<string>;
   sessionGeneratedFiles: Set<string>;
+  isRunning: boolean;
+  createdAt: Date;
+  lastExecutedAt: Date | null;
+  containerId: string;
 }
 
 class SessionManager {
   private sessionConfigs: Map<string, SessionConfig>;
   private sessionContainers: Map<string, Docker.Container>;
   private containerMeta: Map<string, ContainerMeta>;
+  private sessionContainerHistory: Map<string, ContainerMeta[]>;
 
   constructor() {
     this.sessionConfigs = new Map();
     this.sessionContainers = new Map();
     this.containerMeta = new Map();
+    this.sessionContainerHistory = new Map();
   }
 
   getSessionConfig(sessionId: string): SessionConfig | undefined {
@@ -52,6 +58,10 @@ class SessionManager {
 
   setContainerMeta(containerId: string, meta: ContainerMeta): void {
     this.containerMeta.set(containerId, meta);
+    
+    const history = this.sessionContainerHistory.get(meta.sessionId) || [];
+    history.push(meta);
+    this.sessionContainerHistory.set(meta.sessionId, history);
   }
 
   hasSession(sessionId: string): boolean {
@@ -65,16 +75,32 @@ class SessionManager {
       this.sessionContainers.delete(sessionId);
     }
     this.sessionConfigs.delete(sessionId);
+    this.sessionContainerHistory.delete(sessionId);
   }
 
   clear(): void {
     this.sessionConfigs.clear();
     this.sessionContainers.clear();
     this.containerMeta.clear();
+    this.sessionContainerHistory.clear();
   }
 
   getSessionIds(): string[] {
     return Array.from(this.sessionConfigs.keys());
+  }
+
+  getSessionContainerHistory(sessionId: string): ContainerMeta[] {
+    return this.sessionContainerHistory.get(sessionId) || [];
+  }
+
+  async updateContainerState(containerId: string, isRunning: boolean): Promise<void> {
+    const meta = this.containerMeta.get(containerId);
+    if (meta) {
+      meta.isRunning = isRunning;
+      if (isRunning) {
+        meta.lastExecutedAt = new Date();
+      }
+    }
   }
 }
 
@@ -138,218 +164,229 @@ export class ExecutionEngine {
     let command: string[];
     let workingDir = '/workspace';
 
-    // Apply per-execution resource limits if specified
-    if (options.cpuLimit || options.memoryLimit) {
-      const updateCfg: any = {};
+    await this.sessionManager.updateContainerState(container.id, true);
 
-      // Parse memory strings like '512m', '1g', or number of bytes
-      const parseMem = (val: string): number => {
-        const lower = val.toLowerCase();
-        if (lower.endsWith('g')) return parseInt(lower) * 1024 * 1024 * 1024;
-        if (lower.endsWith('m')) return parseInt(lower) * 1024 * 1024;
-        if (lower.endsWith('k')) return parseInt(lower) * 1024;
-        return parseInt(lower);
-      };
+    try {
+      // Apply per-execution resource limits if specified
+      if (options.cpuLimit || options.memoryLimit) {
+        const updateCfg: any = {};
 
-      if (options.memoryLimit) {
-        updateCfg.Memory = parseMem(options.memoryLimit);
-        updateCfg.MemorySwap = -1; // disable swap limit
-      }
+        // Parse memory strings like '512m', '1g', or number of bytes
+        const parseMem = (val: string): number => {
+          const lower = val.toLowerCase();
+          if (lower.endsWith('g')) return parseInt(lower) * 1024 * 1024 * 1024;
+          if (lower.endsWith('m')) return parseInt(lower) * 1024 * 1024;
+          if (lower.endsWith('k')) return parseInt(lower) * 1024;
+          return parseInt(lower);
+        };
 
-      if (options.cpuLimit) {
-        const cpu = parseFloat(options.cpuLimit);
-        if (!isNaN(cpu) && cpu > 0) {
-          updateCfg.CpuPeriod = 100000;
-          updateCfg.CpuQuota = Math.floor(cpu * 100000); // e.g., 0.5 -> 50000
+        if (options.memoryLimit) {
+          updateCfg.Memory = parseMem(options.memoryLimit);
+          updateCfg.MemorySwap = -1; // disable swap limit
+        }
+
+        if (options.cpuLimit) {
+          const cpu = parseFloat(options.cpuLimit);
+          if (!isNaN(cpu) && cpu > 0) {
+            updateCfg.CpuPeriod = 100000;
+            updateCfg.CpuQuota = Math.floor(cpu * 100000); // e.g., 0.5 -> 50000
+          }
+        }
+
+        try {
+          await container.update(updateCfg);
+        } catch (err) {
+          console.warn('Failed to update container resource limits:', err);
         }
       }
 
-      try {
-        await container.update(updateCfg);
-      } catch (err) {
-        console.warn('Failed to update container resource limits:', err);
-      }
-    }
+      // Get container metadata and calculate new dependency checksum
+      const meta = this.sessionManager.getContainerMeta(container.id);
+      const newDepsChecksum = this.calculateDepsChecksum(options.dependencies);
+      const depsAlreadyInstalled = Boolean(meta?.depsInstalled && meta?.depsChecksum === newDepsChecksum);
 
-    // Get container metadata and calculate new dependency checksum
-    const meta = this.sessionManager.getContainerMeta(container.id);
-    const newDepsChecksum = this.calculateDepsChecksum(options.dependencies);
-    const depsAlreadyInstalled = Boolean(meta?.depsInstalled && meta?.depsChecksum === newDepsChecksum);
-
-    // Save current baseline before execution
-    if (meta) {
-      meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
-    }
-
-    if (options.runApp) {
-      // Validate that the working directory is mounted
-      const cwdMount = config.containerConfig.mounts?.find(
-        mount => mount.type === 'directory' && mount.target === options.runApp!.cwd
-      );
-
-      if (!cwdMount) {
-        throw new Error(`Working directory ${options.runApp.cwd} is not mounted in the container`);
+      // Save current baseline before execution
+      if (meta) {
+        meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
       }
 
-      workingDir = options.runApp.cwd;
+      if (options.runApp) {
+        // Validate that the working directory is mounted
+        const cwdMount = config.containerConfig.mounts?.find(
+          mount => mount.type === 'directory' && mount.target === options.runApp!.cwd
+        );
 
-      // For running entire applications, we don't need to write the code file
-      // as it's already in the mounted directory. Build the command via the LanguageRegistry.
-      const langCfgRunApp = LanguageRegistry.get(options.language);
-      if (!langCfgRunApp) {
-        throw new Error(`Unsupported language: ${options.language}`);
-      }
+        if (!cwdMount) {
+          throw new Error(`Working directory ${options.runApp.cwd} is not mounted in the container`);
+        }
 
-      command = langCfgRunApp.buildRunAppCommand(options.runApp.entryFile, depsAlreadyInstalled);
-    } else {
-      // Write code directly to workspace
-      // Determine the correct filename based on language
-      const langCfgInline = LanguageRegistry.get(options.language)!;
-      const workspaceFilename = langCfgInline.codeFilename;
+        workingDir = options.runApp.cwd;
 
-      const writeExec = await container.exec({
-        Cmd: ['sh', '-c', `cat > /workspace/${workspaceFilename} << 'EOL'
+        // For running entire applications, we don't need to write the code file
+        // as it's already in the mounted directory. Build the command via the LanguageRegistry.
+        const langCfgRunApp = LanguageRegistry.get(options.language);
+        if (!langCfgRunApp) {
+          throw new Error(`Unsupported language: ${options.language}`);
+        }
+
+        command = langCfgRunApp.buildRunAppCommand(options.runApp.entryFile, depsAlreadyInstalled);
+      } else {
+        // Write code directly to workspace
+        // Determine the correct filename based on language
+        const langCfgInline = LanguageRegistry.get(options.language)!;
+        const workspaceFilename = langCfgInline.codeFilename;
+
+        const writeExec = await container.exec({
+          Cmd: ['sh', '-c', `cat > /workspace/${workspaceFilename} << 'EOL'
 ${options.code.trim()}
 EOL`],
-        AttachStdout: true,
-        AttachStderr: true
-      });
-      const writeStream = await writeExec.start({ hijack: true, stdin: false });
-
-      // Wait for the write operation to complete
-      await new Promise<void>((resolve, reject) => {
-        writeStream.on('end', async () => {
-          try {
-            const info = await writeExec.inspect();
-            if ((info.ExitCode ?? 1) !== 0) {
-              reject(new Error('Failed to write code to workspace'));
-            } else {
-              resolve();
-            }
-          } catch (err) {
-            reject(err);
-          }
-        });
-      });
-
-      // List workspace contents only in verbose mode
-      if (options.verbose) {
-        const lsExec = await container.exec({
-          Cmd: ['ls', '-la', '/workspace'],
           AttachStdout: true,
           AttachStderr: true
         });
-        const lsStream = await lsExec.start({ hijack: true, stdin: false });
-        await new Promise((resolve) => {
-          let output = '';
-          container.modem.demuxStream(lsStream as Duplex, {
-            write: (chunk: Buffer) => {
-              output += chunk.toString();
-              console.log('Workspace contents:', output);
+        const writeStream = await writeExec.start({ hijack: true, stdin: false });
+
+        // Wait for the write operation to complete
+        await new Promise<void>((resolve, reject) => {
+          writeStream.on('end', async () => {
+            try {
+              const info = await writeExec.inspect();
+              if ((info.ExitCode ?? 1) !== 0) {
+                reject(new Error('Failed to write code to workspace'));
+              } else {
+                resolve();
+              }
+            } catch (err) {
+              reject(err);
             }
-          }, process.stderr);
-          lsStream.on('end', resolve);
+          });
         });
-      }
 
-      this.logDebug('Installing dependencies', options.dependencies);
-      // If the language defines a dependency installation step, run it first.
-      if (langCfgInline.installDependencies && !depsAlreadyInstalled) {
-        await langCfgInline.installDependencies(container, options);
-      }
-
-      // Build command using LanguageRegistry (all languages)
-      command = langCfgInline.buildInlineCommand(depsAlreadyInstalled);
-    }
-
-    this.logDebug('Executing command:', command.join(' '));
-
-    return new Promise((resolve, reject) => {
-      container.exec({
-        Cmd: command,
-        AttachStdout: true,
-        AttachStderr: true,
-        WorkingDir: workingDir
-      }, (err, exec) => {
-        if (err || !exec) {
-          reject(err || new Error('Failed to create exec instance'));
-          return;
+        // List workspace contents only in verbose mode
+        if (options.verbose) {
+          const lsExec = await container.exec({
+            Cmd: ['ls', '-la', '/workspace'],
+            AttachStdout: true,
+            AttachStderr: true
+          });
+          const lsStream = await lsExec.start({ hijack: true, stdin: false });
+          await new Promise((resolve) => {
+            let output = '';
+            container.modem.demuxStream(lsStream as Duplex, {
+              write: (chunk: Buffer) => {
+                output += chunk.toString();
+                console.log('Workspace contents:', output);
+              }
+            }, process.stderr);
+            lsStream.on('end', resolve);
+          });
         }
 
-        exec.start({
-          hijack: true,
-          stdin: false
-        }, (err, stream) => {
-          if (err || !stream) {
-            reject(err || new Error('Failed to start exec instance'));
+        this.logDebug('Installing dependencies', options.dependencies);
+        // If the language defines a dependency installation step, run it first.
+        if (langCfgInline.installDependencies && !depsAlreadyInstalled) {
+          await langCfgInline.installDependencies(container, options);
+        }
+
+        // Build command using LanguageRegistry (all languages)
+        command = langCfgInline.buildInlineCommand(depsAlreadyInstalled);
+      }
+
+      this.logDebug('Executing command:', command.join(' '));
+
+      return new Promise((resolve, reject) => {
+        container.exec({
+          Cmd: command,
+          AttachStdout: true,
+          AttachStderr: true,
+          WorkingDir: workingDir
+        }, (err, exec) => {
+          if (err || !exec) {
+            this.sessionManager.updateContainerState(container.id, false);
+            reject(err || new Error('Failed to create exec instance'));
             return;
           }
 
-          let stdout = '';
-          let stderr = '';
-
-          container.modem.demuxStream(stream as Duplex, {
-            write: (chunk: Buffer) => {
-              const data = chunk.toString();
-              stdout += data;
-              if (options.streamOutput?.stdout) {
-                options.streamOutput.stdout(data);
-              }
+          exec.start({
+            hijack: true,
+            stdin: false
+          }, (err, stream) => {
+            if (err || !stream) {
+              this.sessionManager.updateContainerState(container.id, false);
+              reject(err || new Error('Failed to start exec instance'));
+              return;
             }
-          }, {
-            write: (chunk: Buffer) => {
-              const data = chunk.toString();
-              stderr += data;
-              if (options.streamOutput?.stderr) {
-                options.streamOutput.stderr(data);
-              }
-            }
-          });
 
-          stream.on('end', async () => {
-            try {
-              const info = await exec.inspect();
-              // Update dependency installation status and checksum
-              if (!depsAlreadyInstalled && meta) {
-                meta.depsInstalled = true;
-                meta.depsChecksum = newDepsChecksum;
-              }
-              const sid = meta?.sessionId;
-              let generatedFiles: string[] = [];
-              if (sid) {
-                // Get newly generated files since last run
-                generatedFiles = await this.listWorkspaceFiles(sid, true);
-              }
+            let stdout = '';
+            let stderr = '';
 
-              if (meta) {
-                // Update current run's generated files
-                meta.generatedFiles = new Set<string>(generatedFiles);
-                // Add to accumulated generated files
-                if (!meta.sessionGeneratedFiles) {
-                  meta.sessionGeneratedFiles = new Set<string>();
+            container.modem.demuxStream(stream as Duplex, {
+              write: (chunk: Buffer) => {
+                const data = chunk.toString();
+                stdout += data;
+                if (options.streamOutput?.stdout) {
+                  options.streamOutput.stdout(data);
                 }
-                generatedFiles.forEach(file => meta.sessionGeneratedFiles.add(file));
               }
+            }, {
+              write: (chunk: Buffer) => {
+                const data = chunk.toString();
+                stderr += data;
+                if (options.streamOutput?.stderr) {
+                  options.streamOutput.stderr(data);
+                }
+              }
+            });
 
-              const result: ExecutionResult = {
-                stdout,
-                stderr,
-                exitCode: info.ExitCode || 1,
-                executionTime: Date.now() - startTime,
-                workspaceDir: codePath,
-                generatedFiles,
-                sessionGeneratedFiles: meta ? Array.from(meta.sessionGeneratedFiles) : []
-              };
+            stream.on('end', async () => {
+              try {
+                const info = await exec.inspect();
+                // Update dependency installation status and checksum
+                if (!depsAlreadyInstalled && meta) {
+                  meta.depsInstalled = true;
+                  meta.depsChecksum = newDepsChecksum;
+                }
+                const sid = meta?.sessionId;
+                let generatedFiles: string[] = [];
+                if (sid) {
+                  // Get newly generated files since last run
+                  generatedFiles = await this.listWorkspaceFiles(sid, true);
+                }
 
-              this.logDebug(result);
-              resolve(result);
-            } catch (error) {
-              reject(error);
-            }
+                if (meta) {
+                  // Update current run's generated files
+                  meta.generatedFiles = new Set<string>(generatedFiles);
+                  // Add to accumulated generated files
+                  if (!meta.sessionGeneratedFiles) {
+                    meta.sessionGeneratedFiles = new Set<string>();
+                  }
+                  generatedFiles.forEach(file => meta.sessionGeneratedFiles.add(file));
+                }
+
+                const result: ExecutionResult = {
+                  stdout,
+                  stderr,
+                  exitCode: info.ExitCode || 1,
+                  executionTime: Date.now() - startTime,
+                  workspaceDir: codePath,
+                  generatedFiles,
+                  sessionGeneratedFiles: meta ? Array.from(meta.sessionGeneratedFiles) : []
+                };
+
+                this.logDebug(result);
+                this.sessionManager.updateContainerState(container.id, false);
+                resolve(result);
+              } catch (error) {
+                this.sessionManager.updateContainerState(container.id, false);
+                reject(error);
+              }
+            });
           });
         });
       });
-    });
+    } catch (error) {
+      this.sessionManager.updateContainerState(container.id, false);
+      throw error;
+    }
   }
 
   async createSession(config: SessionConfig): Promise<string> {
@@ -393,7 +430,11 @@ EOL`],
         baselineFiles: new Set<string>(),
         workspaceDir: codeDir,
         generatedFiles: new Set<string>(),
-        sessionGeneratedFiles: new Set<string>()
+        sessionGeneratedFiles: new Set<string>(),
+        isRunning: false,
+        createdAt: new Date(),
+        lastExecutedAt: null,
+        containerId: container.id
       });
     }
 
@@ -441,7 +482,11 @@ EOL`],
             baselineFiles: new Set<string>(),
             workspaceDir: codePath,
             generatedFiles: new Set<string>(),
-            sessionGeneratedFiles: new Set<string>()
+            sessionGeneratedFiles: new Set<string>(),
+            isRunning: false,
+            createdAt: new Date(),
+            lastExecutedAt: null,
+            containerId: container.id
           });
           break;
         }
@@ -499,7 +544,11 @@ EOL`],
                 baselineFiles: new Set<string>(),
                 workspaceDir: codePath.length ? codePath : this.getWorkspaceDir(sessionContainer),
                 generatedFiles: new Set<string>(),
-                sessionGeneratedFiles: new Set<string>()
+                sessionGeneratedFiles: new Set<string>(),
+                isRunning: false,
+                createdAt: new Date(),
+                lastExecutedAt: null,
+                containerId: sessionContainer.id
               });
             }
           }
@@ -548,7 +597,11 @@ EOL`],
               baselineFiles: new Set<string>(),
               workspaceDir: codeDir,
               generatedFiles: new Set<string>(),
-              sessionGeneratedFiles: new Set<string>()
+              sessionGeneratedFiles: new Set<string>(),
+              isRunning: false,
+              createdAt: new Date(),
+              lastExecutedAt: null,
+              containerId: sessionContainer.id
             });
           }
           
