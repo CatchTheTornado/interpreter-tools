@@ -1,6 +1,6 @@
 import { generateText } from 'ai';
 import { openai } from "@ai-sdk/openai";
-import { createCodeExecutionTool } from '../src/ai-tool';
+import { createCodeExecutionTool } from '../src/code-execution-tool';
 import * as fs from 'fs';
 import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';

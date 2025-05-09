@@ -1,6 +1,6 @@
 import { generateText } from 'ai';
 import { openai } from '@ai-sdk/openai';
-import { createCodeExecutionTool, getImageForLanguage } from '../src/ai-tool';
+import { createCodeExecutionTool, getImageForLanguage } from '../src/code-execution-tool';
 import { v4 as uuidv4 } from 'uuid';
 import { ContainerStrategy } from '../src/types';
 

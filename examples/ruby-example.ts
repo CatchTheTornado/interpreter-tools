@@ -1,7 +1,7 @@
 import { LanguageRegistry, LanguageConfig } from '../src/languages';
 import { generateText } from 'ai';
 import { openai } from '@ai-sdk/openai';
-import { createCodeExecutionTool } from '../src/ai-tool';
+import { createCodeExecutionTool } from '../src/code-execution-tool';
 
 // Dynamically register Ruby language support
 const rubyConfig: LanguageConfig = {
