@@ -259,8 +259,9 @@ export class ExecutionEngine {
       const newDepsChecksum = this.calculateDepsChecksum(options.dependencies);
       const depsAlreadyInstalled = Boolean(meta?.depsInstalled && meta?.depsChecksum === newDepsChecksum);
 
-      // Save current baseline before execution
+      // Save current baseline before execution (this must happen *before* we start executing)
       if (meta) {
+        meta.workspaceDir = codePath; // keep metadata consistent in case the container was reused
         meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
       }
 
@@ -512,6 +513,7 @@ EOL`],
     const meta = this.sessionManager.getContainerMeta(container.id);
     if (meta) {
       await this.prepareCodeFile(options, codePath);
+      meta.workspaceDir = codePath;
       meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
     }
   }
@@ -591,7 +593,7 @@ EOL`],
             if (!pooledContainer) {
               const containerName = `it_${uuidv4()}`;
               codePath =  tempPathForContainer(containerName);
-              await this.prepareCodeFile(options, codePath);
+              //await this.prepareCodeFile(options, codePath);
               const { container: newContainer, meta } = await this.createNewContainer(config, expectedImage, codePath);
               sessionContainer = newContainer;
               this.sessionManager.setContainerMeta(sessionContainer.id, meta);
@@ -701,7 +703,7 @@ EOL`],
       }
 
       // For PER_SESSION strategy prepare workspace only on first execution
-      if (config.strategy === ContainerStrategy.PER_SESSION) {
+      if (config.strategy === ContainerStrategy.PER_SESSION || config.strategy === ContainerStrategy.POOL) {
         await this.prepareWorkspace(container, codePath, options, config);
       }
 
