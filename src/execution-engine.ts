@@ -275,7 +275,7 @@ EOL`],
         });
 
         // List workspace contents only in verbose mode
-        if (options.verbose) {
+        if (this.verbosity === 'debug') {
           const lsExec = await container.exec({
             Cmd: ['ls', '-la', '/workspace'],
             AttachStdout: true,
@@ -287,7 +287,7 @@ EOL`],
             container.modem.demuxStream(lsStream as Duplex, {
               write: (chunk: Buffer) => {
                 output += chunk.toString();
-                console.log('Workspace contents:', output);
+                this.logDebug('Workspace contents:', output);
               }
             }, process.stderr);
             lsStream.on('end', resolve);
@@ -402,56 +402,71 @@ EOL`],
     }
   }
 
-  async createSession(config: SessionConfig): Promise<string> {
-    const sessionId = config.sessionId ?? uuidv4();
+  private async createNewContainer(
+    config: SessionConfig,
+    expectedImage: string,
+    codePath: string
+  ): Promise<{ container: Docker.Container; meta: ContainerMeta }> {
+    const containerName = `it_${uuidv4()}`;
+    this.logDebug('Creating container', containerName);
+    
+    const container = await this.containerManager.createContainer({
+      ...config.containerConfig,
+      name: containerName,
+      image: expectedImage,
+      mounts: [
+        ...(config.containerConfig.mounts || []),
+        {
+          type: 'directory',
+          source: codePath,
+          target: '/workspace'
+        }
+      ]
+    });
 
-    if (this.sessionManager.hasSession(sessionId)) {
-      if (config.enforceNewSession) {
-        throw new Error(`Session ID ${sessionId} already exists`);
-      }
-      this.logDebug('Reusing existing session', sessionId);
-      return sessionId; // reuse existing session
+    const meta: ContainerMeta = {
+      sessionId: config.sessionId!,
+      depsInstalled: false,
+      depsChecksum: null,
+      baselineFiles: new Set<string>(),
+      workspaceDir: codePath,
+      generatedFiles: new Set<string>(),
+      sessionGeneratedFiles: new Set<string>(),
+      isRunning: false,
+      createdAt: new Date(),
+      lastExecutedAt: null,
+      containerId: container.id
+    };
+
+    return { container, meta };
+  }
+
+  private async handleContainerImageMismatch(
+    container: Docker.Container,
+    expectedImage: string,
+    sessionId: string
+  ): Promise<boolean> {
+    const containerInfo = await container.inspect();
+    if (containerInfo.Config.Image !== expectedImage) {
+      this.logDebug('Container image mismatch, removing container');
+      await this.containerManager.removeContainerAndDir(container);
+      this.sessionManager.deleteSession(sessionId);
+      return true;
     }
+    return false;
+  }
 
-    this.logDebug('Creating session', sessionId, 'strategy', config.strategy);
-
-    this.sessionManager.setSessionConfig(sessionId, config);
-
-    if (config.strategy === ContainerStrategy.PER_SESSION) {
-      const containerName = `it_${uuidv4()}`;
-      this.logDebug('Creating container', containerName);
-      const codeDir = tempPathForContainer(containerName);
-      fs.mkdirSync(codeDir, { recursive: true });
-
-      const container = await this.containerManager.createContainer({
-        ...config.containerConfig,
-        name: containerName,
-        mounts: [
-          ...(config.containerConfig.mounts || []),
-          {
-            type: 'directory',
-            source: codeDir,
-            target: '/workspace'
-          }
-        ]
-      });
-      this.sessionManager.setContainer(sessionId, container);
-      this.sessionManager.setContainerMeta(container.id, {
-        sessionId,
-        depsInstalled: false,
-        depsChecksum: null,
-        baselineFiles: new Set<string>(),
-        workspaceDir: codeDir,
-        generatedFiles: new Set<string>(),
-        sessionGeneratedFiles: new Set<string>(),
-        isRunning: false,
-        createdAt: new Date(),
-        lastExecutedAt: null,
-        containerId: container.id
-      });
+  private async prepareWorkspace(
+    container: Docker.Container,
+    codePath: string,
+    options: ExecutionOptions,
+    config: SessionConfig
+  ): Promise<void> {
+    const meta = this.sessionManager.getContainerMeta(container.id);
+    if (meta && meta.baselineFiles.size === 0) {
+      await this.prepareCodeFile(options, codePath);
+      meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
     }
-
-    return sessionId;
   }
 
   async executeCode(sessionId: string, options: ExecutionOptions): Promise<ExecutionResult> {
@@ -467,54 +482,49 @@ EOL`],
       // Get the expected image for this execution
       const expectedImage = config.containerConfig.image ? config.containerConfig.image : this.getContainerImage(options.language);
 
+      // Determine if we should use a shared workspace
+      const useSharedWorkspace = options.workspaceSharing === 'shared';
+      let sharedWorkspacePath: string | undefined;
+
+      if (useSharedWorkspace) {
+        // Get or create shared workspace path for this session
+        const sessionMeta = this.sessionManager.getSessionConfig(sessionId);
+        if (sessionMeta) {
+          const existingContainer = this.sessionManager.getContainer(sessionId);
+          if (existingContainer) {
+            const existingMeta = this.sessionManager.getContainerMeta(existingContainer.id);
+            if (existingMeta) {
+              sharedWorkspacePath = existingMeta.workspaceDir;
+            }
+          }
+        }
+        if (!sharedWorkspacePath) {
+          // Create new shared workspace if none exists
+          const containerName = `it_${uuidv4()}`;
+          sharedWorkspacePath = tempPathForContainer(containerName);
+          fs.mkdirSync(sharedWorkspacePath, { recursive: true });
+        }
+      }
+
       switch (config.strategy) {
         case ContainerStrategy.PER_EXECUTION: {
           const containerName = `it_${uuidv4()}`;
-          this.logDebug('Creating container', containerName);
-          codePath = tempPathForContainer(containerName);
-          await this.prepareCodeFile(options, codePath);
-
-          container = await this.containerManager.createContainer({
-            ...config.containerConfig,
-            name: containerName,
-            image: expectedImage,
-            mounts: [
-              ...(config.containerConfig.mounts || []),
-              {
-                type: 'directory',
-                source: codePath!,
-                target: '/workspace'
-              }
-            ]
-          });
+          codePath = useSharedWorkspace ? sharedWorkspacePath! : tempPathForContainer(containerName);
+          if (!useSharedWorkspace) {
+            await this.prepareCodeFile(options, codePath);
+          }
+          const { container: newContainer, meta } = await this.createNewContainer(config, expectedImage, codePath);
+          container = newContainer;
           this.sessionManager.setContainer(sessionId, container);
-          this.sessionManager.setContainerMeta(container.id, {
-            sessionId,
-            depsInstalled: false,
-            depsChecksum: null,
-            baselineFiles: new Set<string>(),
-            workspaceDir: codePath,
-            generatedFiles: new Set<string>(),
-            sessionGeneratedFiles: new Set<string>(),
-            isRunning: false,
-            createdAt: new Date(),
-            lastExecutedAt: null,
-            containerId: container.id
-          });
+          this.sessionManager.setContainerMeta(container.id, meta);
           break;
         }
 
         case ContainerStrategy.POOL: {
-          // Check if a container is already assigned to this session
           let sessionContainer = this.sessionManager.getContainer(sessionId);
           
-          // If container exists but has wrong image, remove it and get a new one
           if (sessionContainer) {
-            const containerInfo = await sessionContainer.inspect();
-            if (containerInfo.Config.Image !== expectedImage) {
-              this.logDebug('Container image mismatch, requesting new container');
-              await this.containerManager.returnContainerToPool(sessionContainer);
-              this.sessionManager.deleteSession(sessionId);
+            if (await this.handleContainerImageMismatch(sessionContainer, expectedImage, sessionId)) {
               sessionContainer = undefined;
             }
           }
@@ -522,48 +532,36 @@ EOL`],
           if (!sessionContainer) {
             const pooledContainer = await this.containerManager.getContainerFromPool(expectedImage);
             if (!pooledContainer) {
-              // No available container, create a fresh one
-              const newName = `it_${uuidv4()}`;
-              this.logDebug('Creating container', newName);
-              codePath = tempPathForContainer(newName);
-              await this.prepareCodeFile(options, codePath);
-
-              sessionContainer = await this.containerManager.createContainer({
-                ...config.containerConfig,
-                name: newName,
-                image: expectedImage,
-                mounts: [
-                  ...(config.containerConfig.mounts || []),
-                  {
-                    type: 'directory',
-                    source: codePath!,
-                    target: '/workspace'
-                  }
-                ]
-              });
+              const containerName = `it_${uuidv4()}`;
+              codePath = useSharedWorkspace ? sharedWorkspacePath! : tempPathForContainer(containerName);
+              if (!useSharedWorkspace) {
+                await this.prepareCodeFile(options, codePath);
+              }
+              const { container: newContainer, meta } = await this.createNewContainer(config, expectedImage, codePath);
+              sessionContainer = newContainer;
+              this.sessionManager.setContainerMeta(sessionContainer.id, meta);
             } else {
               sessionContainer = pooledContainer;
+              const existingMeta = this.sessionManager.getContainerMeta(sessionContainer.id);
+              if (existingMeta) {
+                existingMeta.sessionId = sessionId;
+              } else {
+                this.sessionManager.setContainerMeta(sessionContainer.id, {
+                  sessionId,
+                  depsInstalled: false,
+                  depsChecksum: null,
+                  baselineFiles: new Set<string>(),
+                  workspaceDir: useSharedWorkspace ? sharedWorkspacePath! : this.getWorkspaceDir(sessionContainer),
+                  generatedFiles: new Set<string>(),
+                  sessionGeneratedFiles: new Set<string>(),
+                  isRunning: false,
+                  createdAt: new Date(),
+                  lastExecutedAt: null,
+                  containerId: sessionContainer.id
+                });
+              }
             }
             this.sessionManager.setContainer(sessionId, sessionContainer);
-            const existingMeta = this.sessionManager.getContainerMeta(sessionContainer.id);
-            if (existingMeta) {
-              existingMeta.sessionId = sessionId;
-              if (codePath.length) existingMeta.workspaceDir = codePath;
-            } else {
-              this.sessionManager.setContainerMeta(sessionContainer.id, {
-                sessionId,
-                depsInstalled: false,
-                depsChecksum: null,
-                baselineFiles: new Set<string>(),
-                workspaceDir: codePath.length ? codePath : this.getWorkspaceDir(sessionContainer),
-                generatedFiles: new Set<string>(),
-                sessionGeneratedFiles: new Set<string>(),
-                isRunning: false,
-                createdAt: new Date(),
-                lastExecutedAt: null,
-                containerId: sessionContainer.id
-              });
-            }
           }
           container = sessionContainer;
           break;
@@ -572,50 +570,22 @@ EOL`],
         case ContainerStrategy.PER_SESSION: {
           let sessionContainer = this.sessionManager.getContainer(sessionId);
           
-          // If container exists but has wrong image, remove it and create a new one
           if (sessionContainer) {
-            const containerInfo = await sessionContainer.inspect();
-            if (containerInfo.Config.Image !== expectedImage) {
-              this.logDebug('Container image mismatch, creating new container');
-              await this.containerManager.removeContainerAndDir(sessionContainer);
-              this.sessionManager.deleteSession(sessionId);
+            if (await this.handleContainerImageMismatch(sessionContainer, expectedImage, sessionId)) {
               sessionContainer = undefined;
             }
           }
 
           if (!sessionContainer) {
             const containerName = `it_${uuidv4()}`;
-            this.logDebug('Creating container', containerName);
-            const codeDir = tempPathForContainer(containerName);
-            fs.mkdirSync(codeDir, { recursive: true });
-
-            sessionContainer = await this.containerManager.createContainer({
-              ...config.containerConfig,
-              name: containerName,
-              image: expectedImage,
-              mounts: [
-                ...(config.containerConfig.mounts || []),
-                {
-                  type: 'directory',
-                  source: codeDir,
-                  target: '/workspace'
-                }
-              ]
-            });
+            const codeDir = useSharedWorkspace ? sharedWorkspacePath! : tempPathForContainer(containerName);
+            if (!useSharedWorkspace) {
+              fs.mkdirSync(codeDir, { recursive: true });
+            }
+            const { container: newContainer, meta } = await this.createNewContainer(config, expectedImage, codeDir);
+            sessionContainer = newContainer;
             this.sessionManager.setContainer(sessionId, sessionContainer);
-            this.sessionManager.setContainerMeta(sessionContainer.id, {
-              sessionId,
-              depsInstalled: false,
-              depsChecksum: null,
-              baselineFiles: new Set<string>(),
-              workspaceDir: codeDir,
-              generatedFiles: new Set<string>(),
-              sessionGeneratedFiles: new Set<string>(),
-              isRunning: false,
-              createdAt: new Date(),
-              lastExecutedAt: null,
-              containerId: sessionContainer.id
-            });
+            this.sessionManager.setContainerMeta(sessionContainer.id, meta);
           }
           
           container = sessionContainer;
@@ -629,23 +599,17 @@ EOL`],
       // If codePath still empty (reused container), infer from container name
       if (!codePath) {
         const info = await container.inspect();
-        codePath = tempPathForContainer(info.Name.replace('/', ''));
+        codePath = useSharedWorkspace ? sharedWorkspacePath! : tempPathForContainer(info.Name.replace('/', ''));
       }
 
       // For PER_SESSION strategy prepare workspace only on first execution
       if (config.strategy === ContainerStrategy.PER_SESSION) {
-        const metaPrepare = this.sessionManager.getContainerMeta(container.id);
-        if (metaPrepare && metaPrepare.baselineFiles.size === 0) {
-          await this.prepareCodeFile(options, codePath);
-          metaPrepare.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
-        }
+        await this.prepareWorkspace(container, codePath, options, config);
       }
 
       const result = await this.executeInContainer(container, options, config, codePath);
 
-      if (config.strategy === ContainerStrategy.POOL) {
-        // Do nothing here; container remains assigned for session lifetime.
-      } else if (config.strategy === ContainerStrategy.PER_EXECUTION) {
+      if (config.strategy === ContainerStrategy.PER_EXECUTION) {
         await this.containerManager.removeContainerAndDir(container);
         this.sessionManager.deleteSession(sessionId);
       }
@@ -826,5 +790,57 @@ EOL`],
       lastExecutedAt,
       isActive: Boolean(container && containerMeta?.isRunning)
     };
+  }
+
+  async createSession(config: SessionConfig): Promise<string> {
+    const sessionId = config.sessionId ?? uuidv4();
+
+    if (this.sessionManager.hasSession(sessionId)) {
+      if (config.enforceNewSession) {
+        throw new Error(`Session ID ${sessionId} already exists`);
+      }
+      this.logDebug('Reusing existing session', sessionId);
+      return sessionId; // reuse existing session
+    }
+
+    this.logDebug('Creating session', sessionId, 'strategy', config.strategy);
+
+    this.sessionManager.setSessionConfig(sessionId, config);
+
+    if (config.strategy === ContainerStrategy.PER_SESSION) {
+      const containerName = `it_${uuidv4()}`;
+      this.logDebug('Creating container', containerName);
+      const codeDir = tempPathForContainer(containerName);
+      fs.mkdirSync(codeDir, { recursive: true });
+
+      const container = await this.containerManager.createContainer({
+        ...config.containerConfig,
+        name: containerName,
+        mounts: [
+          ...(config.containerConfig.mounts || []),
+          {
+            type: 'directory',
+            source: codeDir,
+            target: '/workspace'
+          }
+        ]
+      });
+      this.sessionManager.setContainer(sessionId, container);
+      this.sessionManager.setContainerMeta(container.id, {
+        sessionId,
+        depsInstalled: false,
+        depsChecksum: null,
+        baselineFiles: new Set<string>(),
+        workspaceDir: codeDir,
+        generatedFiles: new Set<string>(),
+        sessionGeneratedFiles: new Set<string>(),
+        isRunning: false,
+        createdAt: new Date(),
+        lastExecutedAt: null,
+        containerId: container.id
+      });
+    }
+
+    return sessionId;
   }
 } 

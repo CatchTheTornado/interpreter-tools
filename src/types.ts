@@ -16,6 +16,7 @@ export interface ExecutionOptions {
     stdout?: (data: string) => void;
     stderr?: (data: string) => void;
   };
+  workspaceSharing?: 'isolated' | 'shared';  // New option: 'isolated' (default) or 'shared'
 }
 
 export interface MountOptions {
