@@ -12,12 +12,15 @@ interface CodeExecutionResult {
   executionTime: number;
   workspaceDir: string;
   generatedFiles: string[];
+  sessionGeneratedFiles: string[];
 }
 
 interface CodeExecutionToolConfig {
   mounts?: ContainerMount[];
   sessionId?: string;
   defaultStrategy?: 'per_execution' | 'pool' | 'per_session';
+  verbosity?: 'debug' | 'info';
+  workspaceSharing?: 'isolated' | 'shared';
 }
 
 export function createCodeExecutionTool(config: CodeExecutionToolConfig = {}) {
@@ -27,6 +30,7 @@ export function createCodeExecutionTool(config: CodeExecutionToolConfig = {}) {
     throw new Error('No languages registered');
   }
   const languageEnum = z.enum([languageNames[0], ...languageNames.slice(1)] as [string, ...string[]]);
+  
 
   const codeExecutionSchema = z.object({
     code: z.string().describe('The code to execute.'),
@@ -46,6 +50,8 @@ export function createCodeExecutionTool(config: CodeExecutionToolConfig = {}) {
   });
 
   const engine = new ExecutionEngine();
+
+  engine.setVerbosity(config.verbosity ?? 'info');
 
   const tool = {
     description: 'Executes code in an isolated Docker container with support for multiple languages.',
@@ -76,7 +82,8 @@ export function createCodeExecutionTool(config: CodeExecutionToolConfig = {}) {
         code,
         dependencies,
         runApp,
-        streamOutput
+        streamOutput,
+        workspaceSharing: config.workspaceSharing ?? 'isolated'
       });
 
       // Auto cleanup for strategies other than per_session
