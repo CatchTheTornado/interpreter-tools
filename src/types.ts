@@ -1,4 +1,4 @@
-export type Language = 'typescript' | 'javascript' | 'python' | 'shell';
+export type Language = 'typescript' | 'javascript' | 'python' | 'shell'; // default languages
 
 export interface ExecutionOptions {
   language: Language;

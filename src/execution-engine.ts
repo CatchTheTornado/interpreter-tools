@@ -218,6 +218,10 @@ export class ExecutionEngine {
     let command: string[];
     let workingDir = '/workspace';
 
+    // Collect dependency installation output if we need to surface it later
+    let dependencyStdout = '';
+    let dependencyStderr = '';
+
     await this.sessionManager.updateContainerState(container.id, true);
 
     try {
@@ -258,6 +262,9 @@ export class ExecutionEngine {
       const meta = this.sessionManager.getContainerMeta(container.id);
       const newDepsChecksum = this.calculateDepsChecksum(options.dependencies);
       const depsAlreadyInstalled = Boolean(meta?.depsInstalled && meta?.depsChecksum === newDepsChecksum);
+
+      // Track if dependencies installed successfully (starts with previous status)
+      let depsInstallationSucceededGlobal = depsAlreadyInstalled;
 
       // Save current baseline before execution (this must happen *before* we start executing)
       if (meta) {
@@ -336,14 +343,57 @@ EOL`],
           });
         }
 
-        this.logDebug('Installing dependencies', options.dependencies);
-        // If the language defines a dependency installation step, run it first.
-        if (langCfgInline.installDependencies && !depsAlreadyInstalled) {
-          await langCfgInline.installDependencies(container, options);
+        // ----- Dependency installation phase (runs only when they have not been installed yet) -----
+        let depOut = '';
+        let depErr = '';
+
+        if (!depsAlreadyInstalled) {
+          this.logDebug('Installing dependencies', options.dependencies);
+
+          const runAndCapture = async (cmd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
+            const exec = await container.exec({ Cmd: ['sh', '-c', cmd], AttachStdout: true, AttachStderr: true });
+            const stream = await exec.start({ hijack: true, stdin: false });
+            let stdout = '';
+            let stderr = '';
+            await new Promise<void>((resolve) => {
+              container.modem.demuxStream(stream as Duplex,
+                {
+                  write: (chunk: Buffer) => { stdout += chunk.toString(); }
+                },
+                {
+                  write: (chunk: Buffer) => { stderr += chunk.toString(); }
+                });
+              stream.on('end', resolve);
+            });
+            const info = await exec.inspect();
+            return { stdout, stderr, exitCode: info.ExitCode ?? 1 };
+          };
+
+          if (langCfgInline.installDependencies) {
+            const { stdout: o, stderr: e, exitCode } = await langCfgInline.installDependencies(container, options);
+            depOut = o;
+            depErr = e;
+            dependencyStdout = o;
+            dependencyStderr = e;
+
+            this.logDebug('Dependency installation stdout:', depOut);
+            this.logDebug('Dependency installation stderr:', depErr);
+
+            if (exitCode !== 0) {
+              // issues encountered: stream outputs
+              if (options.streamOutput?.stdout && depOut) options.streamOutput.stdout(depOut);
+              if (options.streamOutput?.stderr && depErr) options.streamOutput.stderr(depErr);
+            } else {
+              depsInstallationSucceededGlobal = true;
+            }
+          } else {
+            // No installer; mark success
+            depsInstallationSucceededGlobal = true;
+          }
         }
 
         // Build command using LanguageRegistry (all languages)
-        command = langCfgInline.buildInlineCommand(depsAlreadyInstalled);
+        command = langCfgInline.buildInlineCommand(depsInstallationSucceededGlobal);
       }
 
       this.logDebug('Executing command:', command.join(' '));
@@ -395,8 +445,8 @@ EOL`],
             stream.on('end', async () => {
               try {
                 const info = await exec.inspect();
-                // Update dependency installation status and checksum
-                if (!depsAlreadyInstalled && meta) {
+                // Update dependency installation status and checksum when they were successfully installed during this run
+                if (!depsAlreadyInstalled && depsInstallationSucceededGlobal && meta) {
                   meta.depsInstalled = true;
                   meta.depsChecksum = newDepsChecksum;
                 }
@@ -418,8 +468,8 @@ EOL`],
                 }
 
                 const result: ExecutionResult = {
-                  stdout,
-                  stderr,
+                  stdout: dependencyStdout + stdout,
+                  stderr: dependencyStderr + stderr,
                   exitCode: info.ExitCode || 1,
                   executionTime: Date.now() - startTime,
                   workspaceDir: codePath,
