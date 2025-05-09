@@ -392,7 +392,7 @@ yarn ts-node examples/interactive-shell-example.ts
 ```
 
 Example session:
-```
+```bash
 === Interactive AI Shell ===
 
 Workspace Directory: /tmp/it_abc123
@@ -408,10 +408,8 @@ Executing in Docker sandbox:
 Language: python
 
 Code:
-```python
 for i in range(1, 6):
     print(i)
-```
 
 Output:
 1
@@ -428,7 +426,6 @@ Language: python
 Dependencies: matplotlib
 
 Code:
-```python
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -436,7 +433,6 @@ x = np.linspace(0, 10, 100)
 y = np.sin(x)
 plt.plot(x, y)
 plt.savefig('plot.png')
-```
 
 Output:
 
@@ -600,6 +596,8 @@ interface ContainerMeta {
   createdAt: Date;
   lastExecutedAt: Date | null;
   containerId: string;
+  imageName: string;          // docker image tag used
+  containerName: string;      // friendly name assigned by ExecutionEngine
 }
 ```
 
@@ -609,6 +607,8 @@ This metadata provides:
 - Container state (running/stopped)
 - Timestamps (creation, last execution)
 - Container identification
+- Image name of the container
+- Human-friendly container name
 
 #### `createCodeExecutionTool()`
 
