@@ -619,11 +619,10 @@ EOL`],
 
     // Guard: POOL strategy does not support shared workspaces
     if (options.workspaceSharing === 'shared') {
-      if (config.strategy === ContainerStrategy.POOL) {
-        throw new Error('workspaceSharing "shared" is not supported with ContainerStrategy.POOL; workspace is always cleared between executions. Use PER_SESSION if you need a persistent workspace.');
-      }
-      if (config.strategy === ContainerStrategy.PER_EXECUTION) {
-        throw new Error('workspaceSharing "shared" is not supported with ContainerStrategy.PER_EXECUTION. Use PER_SESSION for a persistent workspace.');
+      const unsupportedStrategies = new Set([ContainerStrategy.POOL, ContainerStrategy.PER_EXECUTION]);
+      if (unsupportedStrategies.has(config.strategy)) {
+        throw new Error(`workspaceSharing "shared" is not supported with ContainerStrategy.${config.strategy}. ` +
+          `Use PER_SESSION for a persistent workspace.`);
       }
     }
 
