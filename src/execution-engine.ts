@@ -43,12 +43,14 @@ class SessionManager {
   private sessionContainers: Map<string, Docker.Container | undefined>;
   private containerMeta: Map<string, ContainerMeta>;
   private sessionContainerHistory: Map<string, ContainerMeta[]>;
+  private idleContainers: Map<string, Docker.Container[]>;
 
   constructor() {
     this.sessionConfigs = new Map();
     this.sessionContainers = new Map();
     this.containerMeta = new Map();
     this.sessionContainerHistory = new Map();
+    this.idleContainers = new Map();
   }
 
   getSessionConfig(sessionId: string): SessionConfig | undefined {
@@ -123,6 +125,37 @@ class SessionManager {
         meta.lastExecutedAt = new Date();
       }
     }
+  }
+
+  addIdleContainer(sessionId: string, container: Docker.Container): void {
+    const idleContainers = this.idleContainers.get(sessionId) || [];
+    idleContainers.push(container);
+    this.idleContainers.set(sessionId, idleContainers);
+  }
+
+  getIdleContainer(sessionId: string, image: string): Docker.Container | undefined {
+    const idleContainers = this.idleContainers.get(sessionId) || [];
+    for (const cont of idleContainers) {
+      const meta = this.containerMeta.get(cont.id);
+      if (meta && meta.imageName === image) {
+        return cont;
+      }
+    }
+    return undefined;
+  }
+
+  removeIdleContainer(sessionId: string, container: Docker.Container): void {
+    const idleContainers = this.idleContainers.get(sessionId) || [];
+    const filtered = idleContainers.filter(c => c.id !== container.id);
+    this.idleContainers.set(sessionId, filtered);
+  }
+
+  getIdleContainers(sessionId: string): Docker.Container[] {
+    return this.idleContainers.get(sessionId) || [];
+  }
+
+  clearIdleContainers(sessionId: string): void {
+    this.idleContainers.delete(sessionId);
   }
 }
 
@@ -595,9 +628,35 @@ EOL`],
         case ContainerStrategy.PER_SESSION: {
           let sessionContainer = this.sessionManager.getContainer(sessionId);
           
-          if (sessionContainer) {
-            if (await this.handleContainerImageMismatch(sessionContainer, expectedImage, sessionId, useSharedWorkspace)) {
-              sessionContainer = undefined;
+          if (useSharedWorkspace) {
+            // Shared workspace: keep mismatched containers for potential reuse later
+            if (sessionContainer) {
+              const info = await sessionContainer.inspect();
+              if (info.Config.Image !== expectedImage) {
+                // Stop and store current container for future reuse
+                try { await sessionContainer.stop(); } catch {}
+                this.sessionManager.addIdleContainer(sessionId, sessionContainer);
+                sessionContainer = undefined;
+              }
+            }
+
+            // Try to find an idle container with the expected image
+            if (!sessionContainer) {
+              const idle = this.sessionManager.getIdleContainer(sessionId, expectedImage);
+              if (idle) {
+                sessionContainer = idle;
+                await this.ensureContainerRunning(sessionContainer);
+                // remove from idle list
+                this.sessionManager.removeIdleContainer(sessionId, idle);
+                this.sessionManager.setContainer(sessionId, sessionContainer);
+              }
+            }
+          } else {
+            // Non-shared workspace: old mismatch logic
+            if (sessionContainer) {
+              if (await this.handleContainerImageMismatch(sessionContainer, expectedImage, sessionId, false)) {
+                sessionContainer = undefined;
+              }
             }
           }
 
@@ -688,6 +747,13 @@ EOL`],
       }
       this.sessionManager.deleteSession(sessionId);
     }
+
+    // Remove any idle containers kept for this session
+    const idleList = this.sessionManager.getIdleContainers(sessionId);
+    for (const idle of idleList) {
+      await this.containerManager.removeContainerAndDir(idle, !keepGeneratedFiles);
+    }
+    this.sessionManager.clearIdleContainers(sessionId);
   }
 
   async cleanup(keepGeneratedFiles: boolean = false): Promise<void> {
@@ -884,5 +950,14 @@ EOL`],
     }
 
     return sessionId;
+  }
+
+  private async ensureContainerRunning(container: Docker.Container): Promise<void> {
+    try {
+      const info = await container.inspect();
+      if (!info.State.Running) {
+        await container.start();
+      }
+    } catch {}
   }
 } 
