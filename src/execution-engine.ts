@@ -22,6 +22,7 @@ interface ContainerMeta {
   lastExecutedAt: Date | null;
   containerId: string;
   imageName: string;
+  containerName: string;
 }
 
 interface SessionInfo {
@@ -444,7 +445,8 @@ EOL`],
       createdAt: new Date(),
       lastExecutedAt: null,
       containerId: container.id,
-      imageName: expectedImage
+      imageName: config.containerConfig.image,
+      containerName
     };
 
     return { container, meta };
@@ -572,7 +574,8 @@ EOL`],
                   createdAt: new Date(),
                   lastExecutedAt: null,
                   containerId: sessionContainer.id,
-                  imageName: expectedImage
+                  imageName: expectedImage,
+                  containerName: sessionContainer.id
                 });
               }
             }
@@ -613,7 +616,8 @@ EOL`],
               createdAt: new Date(),
               lastExecutedAt: null,
               containerId: sessionContainer.id,
-              imageName: expectedImage
+              imageName: expectedImage,
+              containerName: containerName
             });
           }
           
@@ -867,7 +871,8 @@ EOL`],
         createdAt: new Date(),
         lastExecutedAt: null,
         containerId: container.id,
-        imageName: config.containerConfig.image
+        imageName: config.containerConfig.image,
+        containerName: containerName
       });
     }
 
