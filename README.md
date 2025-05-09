@@ -666,6 +666,14 @@ No changes to `ExecutionEngine` are required.
 | **POOL** | Containers are pooled per session and reused—workspace is wiped between runs. | Best latency / resource trade-off for chat bots. |
 | **PER_SESSION** | One dedicated container for the whole session; not pooled. | Long-running interactive notebooks. |
 
+> **Note**
+> 
+> `ContainerStrategy.POOL` is optimised for fast startup: it re-uses pre-warmed containers and therefore **always clears `/workspace` between executions**.  
+> The `workspaceSharing: "shared"` option is *not available* in this mode.  
+> If you need persistent state you can either:
+> 1. switch to **PER_SESSION** (keeps the internal workspace), or
+> 2. mount a host directory via `containerConfig.mounts` to share specific data/files across pooled runs.
+
 ---
 
 ### Mounts & Environment Variables
