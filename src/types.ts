@@ -37,6 +37,7 @@ export interface ExecutionResult {
   exitCode: number;
   executionTime: number;
   workspaceDir: string;
+  generatedFiles: string[];
 }
 
 export interface ContainerPoolConfig {
@@ -55,6 +56,8 @@ export interface SessionConfig {
   strategy: ContainerStrategy;
   poolConfig?: ContainerPoolConfig;
   containerConfig: ContainerConfig;
+  sessionId?: string;
+  enforceNewSession?: boolean;
 }
 
 export interface ContainerMount {

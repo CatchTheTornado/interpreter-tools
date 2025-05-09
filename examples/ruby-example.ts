@@ -21,7 +21,7 @@ const rubyConfig: LanguageConfig = {
 async function main() {
   LanguageRegistry.register(rubyConfig);
 
-  const tool = createCodeExecutionTool();
+  const { codeExecutionTool}= createCodeExecutionTool();
 
   // Ask AI to generate a simple Ruby script
   const result = await generateText({
@@ -33,7 +33,7 @@ async function main() {
         content: 'Write a Ruby script that: prints "Hello from Ruby" plus calculating fibonacci, then call the fib(10), take the current time and return it as a nice string. Run the script using the tool provided. Show the result output.'
       }
     ],
-    tools: { codeExecutionTool: tool },
+    tools: { codeExecutionTool },
     toolChoice: 'required'
   });
 

@@ -30,7 +30,7 @@ The script should:
 Please format your response as a shell script with comments explaining each step.`
         }
       ],
-      tools: { codeExecutionTool: createCodeExecutionTool() },
+      tools: { codeExecutionTool: createCodeExecutionTool().codeExecutionTool },
       toolChoice: 'auto'
     });
 
@@ -55,7 +55,7 @@ Please format your response as a shell script with comments explaining each step
     console.log('** Created script file:', scriptPath);
 
     // Create a code execution tool with the script directory mounted
-    const codeExecutionTool = createCodeExecutionTool({
+    const { codeExecutionTool }= createCodeExecutionTool({
       mounts: [{
         type: 'directory',
         source: scriptDir,

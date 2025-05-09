@@ -376,12 +376,14 @@ export class ContainerManager {
     }
   }
 
-  async removeContainerAndDir(container: Docker.Container): Promise<void> {
+  async removeContainerAndDir(container: Docker.Container, deleteDir: boolean = true): Promise<void> {
     try {
       const info = await container.inspect();
       await container.remove({ force: true });
       const cname = info.Name.replace('/', '');
-      fs.rmSync(tempPathForContainer(cname), { recursive: true, force: true });
+      if (deleteDir) {
+        fs.rmSync(tempPathForContainer(cname), { recursive: true, force: true });
+      }
 
       // Remove from tracking structures if present
       this.containers.delete(container.id);
