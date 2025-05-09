@@ -291,7 +291,35 @@ export class ExecutionEngine {
           throw new Error(`Unsupported language: ${options.language}`);
         }
 
-        command = langCfgRunApp.buildRunAppCommand(options.runApp.entryFile, depsAlreadyInstalled);
+        // ----- Dependency installation phase (runs only when they have not been installed yet and before runApp command) -----
+        let depOut = '';
+        let depErr = '';
+
+        if (!depsAlreadyInstalled) {
+          this.logDebug('Installing dependencies', options.dependencies);
+
+          if (langCfgRunApp.installDependencies) {
+            const { stdout: o, stderr: e, exitCode } = await langCfgRunApp.installDependencies(container, options);
+            depOut = o;
+            depErr = e;
+            dependencyStdout = o;
+            dependencyStderr = e;
+
+            this.logDebug('Dependency installation stdout:', depOut);
+            this.logDebug('Dependency installation stderr:', depErr);
+
+            if (exitCode !== 0) {
+              // Surface dependency installation output streams if provided
+              if (options.streamOutput?.dependencyStdout && depOut) options.streamOutput.dependencyStdout(depOut);
+              if (options.streamOutput?.dependencyStderr && depErr) options.streamOutput.dependencyStderr(depErr);
+            } else {
+              depsInstallationSucceededGlobal = true;
+            }
+          }
+        }
+
+        // Build command using LanguageRegistry (all languages)
+        command = langCfgRunApp.buildRunAppCommand(options.runApp.entryFile, depsInstallationSucceededGlobal);
       } else {
         // Write code directly to workspace
         // Determine the correct filename based on language

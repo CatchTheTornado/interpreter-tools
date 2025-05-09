@@ -55,11 +55,28 @@ export const defaultLanguageConfigs: LanguageConfig[] = [
     codeFilename: 'code.js',
     prepareFiles: (options, dir) => jsTsPrepare(options, dir, 'code.js'),
     buildInlineCommand: (depsInstalled) => [
-      'sh', '-c', `${depsInstalled ? '' : 'yarn install && '}node code.js`
+      'sh', '-c', `node code.js`
     ],
     buildRunAppCommand: (entry, depsInstalled) => [
-      'sh', '-c', `${depsInstalled ? '' : 'yarn install && '}node ${entry}`
-    ]
+      'sh', '-c', `node ${entry}`
+    ],
+    installDependencies: async (container, options) => {
+      // Install NPM/Yarn dependencies inside container when package.json exists
+      const cmd = 'if [ -f package.json ]; then yarn install --ignore-scripts --non-interactive || npm install --no-audit --no-fund; fi';
+      const exec = await container.exec({ Cmd: ['sh', '-c', cmd], AttachStdout: true, AttachStderr: true });
+      const stream = await exec.start({ hijack: true, stdin: false });
+      let out = '';
+      let err = '';
+      await new Promise<void>(resolve => {
+        container.modem.demuxStream(stream as Duplex,
+          { write: (c: Buffer) => { out += c.toString(); } },
+          { write: (c: Buffer) => { err += c.toString(); } }
+        );
+        stream.on('end', resolve);
+      });
+      const info = await exec.inspect();
+      return { stdout: out, stderr: err, exitCode: typeof info.ExitCode === 'number' ? info.ExitCode : 1 };
+    }
   },
   {
     language: 'typescript',
