@@ -105,7 +105,7 @@ async function main() {
           messages: [
             {
               role: 'user',
-              content: `Execute this command or prompt, if not specified difffernt try to use shell or python, if using non standard modules pass them as "dependencies" to be installed: ${input}`
+              content: `Execute this command or prompt, if not specified different try to use shell or python, if using non standard modules pass them as "dependencies" to be installed: ${input}`
             }
           ],
           tools: { codeExecutionTool },
