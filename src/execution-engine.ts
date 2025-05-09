@@ -7,10 +7,12 @@ import Docker from 'dockerode';
 import { Duplex } from 'stream';
 import { LanguageRegistry } from './languages';
 import { tempPathForContainer } from './constants';
+import * as crypto from 'crypto';
 
 interface ContainerMeta {
   sessionId: string;
   depsInstalled: boolean;
+  depsChecksum: string | null;
   baselineFiles: Set<string>;
   workspaceDir: string;
   generatedFiles: Set<string>;
@@ -105,9 +107,10 @@ export class ExecutionEngine {
       }
     }
 
-    // Determine if dependencies are already installed for this container (JS/TS)
+    // Get container metadata and calculate new dependency checksum
     const meta = this.containerMeta.get(container.id);
-    const depsAlreadyInstalled = meta?.depsInstalled ?? false;
+    const newDepsChecksum = this.calculateDepsChecksum(options.dependencies);
+    const depsAlreadyInstalled = Boolean(meta?.depsInstalled && meta?.depsChecksum === newDepsChecksum);
 
     if (options.runApp) {
       // Validate that the working directory is mounted
@@ -182,7 +185,7 @@ EOL`],
 
       this.logDebug('Installing dependencies', options.dependencies);
       // If the language defines a dependency installation step, run it first.
-      if (langCfgInline.installDependencies) {
+      if (langCfgInline.installDependencies && !depsAlreadyInstalled) {
         await langCfgInline.installDependencies(container, options);
       }
 
@@ -242,9 +245,10 @@ EOL`],
           stream.on('end', async () => {
             try {
               const info = await exec.inspect();
-              // Mark container as having dependencies installed for future runs
+              // Update dependency installation status and checksum
               if (!depsAlreadyInstalled && meta) {
                 meta.depsInstalled = true;
+                meta.depsChecksum = newDepsChecksum;
               }
               const sid = meta?.sessionId;
               let generatedFiles: string[] = [];
@@ -318,6 +322,7 @@ EOL`],
       this.containerMeta.set(container.id, {
         sessionId,
         depsInstalled: false,
+        depsChecksum: null,
         baselineFiles: new Set<string>(),
         workspaceDir: codeDir,
         generatedFiles: new Set<string>()
@@ -361,6 +366,7 @@ EOL`],
           this.containerMeta.set(container.id, {
             sessionId,
             depsInstalled: false,
+            depsChecksum: null,
             baselineFiles: new Set<string>(),
             workspaceDir: codePath,
             generatedFiles: new Set<string>()
@@ -406,6 +412,7 @@ EOL`],
               this.containerMeta.set(sessionContainer.id, {
                 sessionId,
                 depsInstalled: false,
+                depsChecksum: null,
                 baselineFiles: new Set<string>(),
                 workspaceDir: codePath.length ? codePath : this.getWorkspaceDir(sessionContainer),
                 generatedFiles: new Set<string>()
@@ -600,5 +607,14 @@ EOL`],
     if (!container) throw new Error('Session not found');
     const workspaceDir = this.getWorkspaceDir(container);
     return fs.readFileSync(path.join(workspaceDir, relativePath));
+  }
+
+  private calculateDepsChecksum(dependencies: string[] | undefined): string {
+    if (!dependencies || dependencies.length === 0) {
+      return '';
+    }
+    // Sort dependencies to ensure consistent checksum regardless of order
+    const sortedDeps = [...dependencies].sort();
+    return crypto.createHash('sha256').update(sortedDeps.join('|')).digest('hex');
   }
 } 
