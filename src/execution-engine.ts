@@ -492,8 +492,13 @@ EOL`],
     }
 
     // Guard: POOL strategy does not support shared workspaces
-    if (config.strategy === ContainerStrategy.POOL && options.workspaceSharing === 'shared') {
-      throw new Error('workspaceSharing "shared" is not supported with ContainerStrategy.POOL; workspace is always cleared between executions. Use PER_SESSION if you need a persistent workspace.');
+    if (options.workspaceSharing === 'shared') {
+      if (config.strategy === ContainerStrategy.POOL) {
+        throw new Error('workspaceSharing "shared" is not supported with ContainerStrategy.POOL; workspace is always cleared between executions. Use PER_SESSION if you need a persistent workspace.');
+      }
+      if (config.strategy === ContainerStrategy.PER_EXECUTION) {
+        throw new Error('workspaceSharing "shared" is not supported with ContainerStrategy.PER_EXECUTION. Use PER_SESSION for a persistent workspace.');
+      }
     }
 
     let codePath: string = '';
@@ -530,10 +535,9 @@ EOL`],
       switch (config.strategy) {
         case ContainerStrategy.PER_EXECUTION: {
           const containerName = `it_${uuidv4()}`;
-          codePath = useSharedWorkspace ? sharedWorkspacePath! : tempPathForContainer(containerName);
-          if (!useSharedWorkspace) {
-            await this.prepareCodeFile(options, codePath);
-          }
+          codePath = tempPathForContainer(containerName);
+          await this.prepareCodeFile(options, codePath);
+
           const { container: newContainer, meta } = await this.createNewContainer(config, expectedImage, codePath);
           container = newContainer;
           this.sessionManager.setContainer(sessionId, container);
@@ -545,7 +549,7 @@ EOL`],
           let sessionContainer = this.sessionManager.getContainer(sessionId);
           
           if (sessionContainer) {
-            if (await this.handleContainerImageMismatch(sessionContainer, expectedImage, sessionId, useSharedWorkspace)) {
+            if (await this.handleContainerImageMismatch(sessionContainer, expectedImage, sessionId, false)) {
               sessionContainer = undefined;
             }
           }
@@ -554,10 +558,8 @@ EOL`],
             const pooledContainer = await this.containerManager.getContainerFromPool(expectedImage);
             if (!pooledContainer) {
               const containerName = `it_${uuidv4()}`;
-              codePath = useSharedWorkspace ? sharedWorkspacePath! : tempPathForContainer(containerName);
-              if (!useSharedWorkspace) {
-                await this.prepareCodeFile(options, codePath);
-              }
+              codePath =  tempPathForContainer(containerName);
+              await this.prepareCodeFile(options, codePath);
               const { container: newContainer, meta } = await this.createNewContainer(config, expectedImage, codePath);
               sessionContainer = newContainer;
               this.sessionManager.setContainerMeta(sessionContainer.id, meta);
