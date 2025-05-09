@@ -410,6 +410,9 @@ EOL`],
     let container: Docker.Container;
 
     try {
+      // Get the expected image for this execution
+      const expectedImage = config.containerConfig.image ? config.containerConfig.image : this.getContainerImage(options.language);
+
       switch (config.strategy) {
         case ContainerStrategy.PER_EXECUTION: {
           const containerName = `it_${uuidv4()}`;
@@ -420,7 +423,7 @@ EOL`],
           container = await this.containerManager.createContainer({
             ...config.containerConfig,
             name: containerName,
-            image: config.containerConfig.image ? config.containerConfig.image : this.getContainerImage(options.language),
+            image: expectedImage,
             mounts: [
               ...(config.containerConfig.mounts || []),
               {
@@ -446,8 +449,19 @@ EOL`],
         case ContainerStrategy.POOL: {
           // Check if a container is already assigned to this session
           let sessionContainer = this.sessionManager.getContainer(sessionId);
+          
+          // If container exists but has wrong image, remove it and get a new one
+          if (sessionContainer) {
+            const containerInfo = await sessionContainer.inspect();
+            if (containerInfo.Config.Image !== expectedImage) {
+              this.logDebug('Container image mismatch, requesting new container');
+              await this.containerManager.returnContainerToPool(sessionContainer);
+              this.sessionManager.deleteSession(sessionId);
+              sessionContainer = undefined;
+            }
+          }
+
           if (!sessionContainer) {
-            const expectedImage = config.containerConfig.image ? config.containerConfig.image : this.getContainerImage(options.language);
             const pooledContainer = await this.containerManager.getContainerFromPool(expectedImage);
             if (!pooledContainer) {
               // No available container, create a fresh one
@@ -494,9 +508,48 @@ EOL`],
         }
 
         case ContainerStrategy.PER_SESSION: {
-          const sessionContainer = this.sessionManager.getContainer(sessionId);
+          let sessionContainer = this.sessionManager.getContainer(sessionId);
+          
+          // If container exists but has wrong image, remove it and create a new one
+          if (sessionContainer) {
+            const containerInfo = await sessionContainer.inspect();
+            if (containerInfo.Config.Image !== expectedImage) {
+              this.logDebug('Container image mismatch, creating new container');
+              await this.containerManager.removeContainerAndDir(sessionContainer);
+              this.sessionManager.deleteSession(sessionId);
+              sessionContainer = undefined;
+            }
+          }
+
           if (!sessionContainer) {
-            throw new Error('Session container not found');
+            const containerName = `it_${uuidv4()}`;
+            this.logDebug('Creating container', containerName);
+            const codeDir = tempPathForContainer(containerName);
+            fs.mkdirSync(codeDir, { recursive: true });
+
+            sessionContainer = await this.containerManager.createContainer({
+              ...config.containerConfig,
+              name: containerName,
+              image: expectedImage,
+              mounts: [
+                ...(config.containerConfig.mounts || []),
+                {
+                  type: 'directory',
+                  source: codeDir,
+                  target: '/workspace'
+                }
+              ]
+            });
+            this.sessionManager.setContainer(sessionId, sessionContainer);
+            this.sessionManager.setContainerMeta(sessionContainer.id, {
+              sessionId,
+              depsInstalled: false,
+              depsChecksum: null,
+              baselineFiles: new Set<string>(),
+              workspaceDir: codeDir,
+              generatedFiles: new Set<string>(),
+              sessionGeneratedFiles: new Set<string>()
+            });
           }
           
           container = sessionContainer;
