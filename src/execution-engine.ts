@@ -21,6 +21,7 @@ interface ContainerMeta {
   createdAt: Date;
   lastExecutedAt: Date | null;
   containerId: string;
+  imageName: string;
 }
 
 interface SessionInfo {
@@ -77,8 +78,11 @@ class SessionManager {
     this.containerMeta.set(containerId, meta);
     
     const history = this.sessionContainerHistory.get(meta.sessionId) || [];
-    history.push(meta);
-    this.sessionContainerHistory.set(meta.sessionId, history);
+    // Only add to history if this is a new container
+    if (!history.some(h => h.containerId === meta.containerId)) {
+      history.push(meta);
+      this.sessionContainerHistory.set(meta.sessionId, history);
+    }
   }
 
   hasSession(sessionId: string): boolean {
@@ -439,7 +443,8 @@ EOL`],
       isRunning: false,
       createdAt: new Date(),
       lastExecutedAt: null,
-      containerId: container.id
+      containerId: container.id,
+      imageName: expectedImage
     };
 
     return { container, meta };
@@ -566,7 +571,8 @@ EOL`],
                   isRunning: false,
                   createdAt: new Date(),
                   lastExecutedAt: null,
-                  containerId: sessionContainer.id
+                  containerId: sessionContainer.id,
+                  imageName: expectedImage
                 });
               }
             }
@@ -595,7 +601,20 @@ EOL`],
             const { container: newContainer, meta } = await this.createNewContainer(config, expectedImage, codeDir);
             sessionContainer = newContainer;
             this.sessionManager.setContainer(sessionId, sessionContainer);
-            this.sessionManager.setContainerMeta(sessionContainer.id, meta);
+            this.sessionManager.setContainerMeta(sessionContainer.id, {
+              sessionId,
+              depsInstalled: false,
+              depsChecksum: null,
+              baselineFiles: new Set<string>(),
+              workspaceDir: codeDir,
+              generatedFiles: new Set<string>(),
+              sessionGeneratedFiles: new Set<string>(),
+              isRunning: false,
+              createdAt: new Date(),
+              lastExecutedAt: null,
+              containerId: sessionContainer.id,
+              imageName: expectedImage
+            });
           }
           
           container = sessionContainer;
@@ -847,7 +866,8 @@ EOL`],
         isRunning: false,
         createdAt: new Date(),
         lastExecutedAt: null,
-        containerId: container.id
+        containerId: container.id,
+        imageName: expectedImage
       });
     }
 

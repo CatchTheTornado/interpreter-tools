@@ -84,7 +84,8 @@ async function main() {
         console.log('\nContainer History:');
         sessionInfo.containerHistory.forEach((meta, index) => {
           console.log(`\nContainer ${index + 1}:`);
-          console.log('- Image:', meta.containerId);
+          console.log('- Image:', meta.imageName);
+          console.log('- Container ID:', meta.containerId);
           console.log('- Created:', meta.createdAt);
           console.log('- Last Executed:', meta.lastExecutedAt || 'Never');
           console.log('- Generated Files:', meta.sessionGeneratedFiles.size);
