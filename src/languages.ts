@@ -69,7 +69,7 @@ export const defaultLanguageConfigs: LanguageConfig[] = [
         elif [ ! -z \"${deps}\" ]; then \
           npm init -y >/dev/null 2>&1 && npm install --no-audit --no-fund ${deps}; \
         fi`;
-      const exec = await container.exec({ Cmd: ['sh', '-c', cmd], AttachStdout: true, AttachStderr: true });
+      const exec = await container.exec({ Cmd: ['sh', '-c', cmd], AttachStdout: true, AttachStderr: true, WorkingDir: options.runApp?.cwd || '/workspace' });
       const stream = await exec.start({ hijack: true, stdin: false });
       let out = '';
       let err = '';
@@ -102,7 +102,7 @@ export const defaultLanguageConfigs: LanguageConfig[] = [
         elif [ ! -z \"${deps}\" ]; then \
           npm init -y >/dev/null 2>&1 && npm install --no-audit --no-fund ${deps}; \
         fi`;
-      const exec = await container.exec({ Cmd: ['sh', '-c', cmd], AttachStdout: true, AttachStderr: true });
+      const exec = await container.exec({ Cmd: ['sh', '-c', cmd], AttachStdout: true, AttachStderr: true, WorkingDir: options.runApp?.cwd || '/workspace' });
       const stream = await exec.start({ hijack: true, stdin: false });
       let out = '';
       let err = '';
@@ -133,9 +133,9 @@ export const defaultLanguageConfigs: LanguageConfig[] = [
     buildRunAppCommand: (entry, _depsInstalled: boolean) => [
       'sh', '-c', `py=$(command -v python3 || command -v python) && $py -u ${entry}`
     ],
-    installDependencies: async (container, _options) => {
+    installDependencies: async (container, options) => {
       const cmd = 'if [ -f requirements.txt ]; then pip install -r requirements.txt; fi';
-      const exec = await container.exec({ Cmd: ['sh', '-c', cmd], AttachStdout: true, AttachStderr: true });
+      const exec = await container.exec({ Cmd: ['sh', '-c', cmd], AttachStdout: true, AttachStderr: true, WorkingDir: options.runApp?.cwd || '/workspace' });
       const stream = await exec.start({ hijack: true, stdin: false });
       let out = '';
       let err = '';
@@ -170,7 +170,8 @@ export const defaultLanguageConfigs: LanguageConfig[] = [
       const updateExec = await container.exec({
         Cmd: ['sh', '-c', 'apk update'],
         AttachStdout: true,
-        AttachStderr: true
+        AttachStderr: true,
+        WorkingDir: options.runApp?.cwd || '/workspace'
       });
       let updateOutput = '';
       const updateStream = await updateExec.start({ hijack: true, stdin: false });
@@ -202,7 +203,8 @@ export const defaultLanguageConfigs: LanguageConfig[] = [
       const installExec = await container.exec({
         Cmd: ['sh', '-c', installCmd],
         AttachStdout: true,
-        AttachStderr: true
+        AttachStderr: true,
+        WorkingDir: options.runApp?.cwd || '/workspace'
       });
       let installOutput = '';
       const installStream = await installExec.start({ hijack: true, stdin: false });
