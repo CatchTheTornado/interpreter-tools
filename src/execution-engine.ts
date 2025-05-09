@@ -314,6 +314,10 @@ export class ExecutionEngine {
               if (options.streamOutput?.dependencyStderr && depErr) options.streamOutput.dependencyStderr(depErr);
             } else {
               depsInstallationSucceededGlobal = true;
+              // After successful dependency installation, refresh baseline so dependency files are not treated as generated
+              if (meta) {
+                meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
+              }
             }
           }
         }
@@ -408,15 +412,23 @@ EOL`],
             this.logDebug('Dependency installation stderr:', depErr);
 
             if (exitCode !== 0) {
-              // issues encountered: stream outputs
+              // Surface dependency installation output streams if provided
               if (options.streamOutput?.dependencyStdout && depOut) options.streamOutput.dependencyStdout(depOut);
               if (options.streamOutput?.dependencyStderr && depErr) options.streamOutput.dependencyStderr(depErr);
             } else {
               depsInstallationSucceededGlobal = true;
+              // After successful dependency installation, refresh baseline so dependency files are not treated as generated
+              if (meta) {
+                meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
+              }
             }
           } else {
             // No installer; mark success
             depsInstallationSucceededGlobal = true;
+            // Refresh baseline when dependencies considered successfully installed (even if no installer) to ensure subsequent file tracking is accurate
+            if (meta) {
+              meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
+            }
           }
         }
 
