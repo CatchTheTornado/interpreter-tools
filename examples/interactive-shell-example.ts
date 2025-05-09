@@ -55,12 +55,42 @@ async function main() {
   console.log('\n=== Interactive AI Shell ===\n');
   console.log('Workspace Directory:', workspaceDir);
   console.log('Type your commands or AI prompts below.');
-  console.log('Type "quit" or press Ctrl+C to exit.\n');
+  console.log('Special commands:');
+  console.log('  - "info" - Show session information and container history');
+  console.log('  - "quit" - Exit the shell');
+  console.log('\n');
 
   const prompt = () => {
     rl.question('> ', async (input) => {
       if (input.toLowerCase() === 'quit') {
         rl.close();
+        return;
+      }
+
+      if (input.toLowerCase() === 'info') {
+        const sessionInfo = await executionEngine.getSessionInfo(sessionId);
+        console.log('\n=== Session Information ===');
+        console.log('Session ID:', sessionInfo.sessionId);
+        console.log('Created:', sessionInfo.createdAt);
+        console.log('Last Executed:', sessionInfo.lastExecutedAt || 'Never');
+        console.log('Active:', sessionInfo.isActive ? 'Yes' : 'No');
+        console.log('\nCurrent Container:');
+        console.log('- Image:', sessionInfo.currentContainer.container ? 
+          (await sessionInfo.currentContainer.container.inspect()).Config.Image : 'None');
+        console.log('- Running:', sessionInfo.currentContainer.meta?.isRunning ? 'Yes' : 'No');
+        console.log('- Created:', sessionInfo.currentContainer.meta?.createdAt);
+        console.log('- Last Executed:', sessionInfo.currentContainer.meta?.lastExecutedAt || 'Never');
+        
+        console.log('\nContainer History:');
+        sessionInfo.containerHistory.forEach((meta, index) => {
+          console.log(`\nContainer ${index + 1}:`);
+          console.log('- Image:', meta.containerId);
+          console.log('- Created:', meta.createdAt);
+          console.log('- Last Executed:', meta.lastExecutedAt || 'Never');
+          console.log('- Generated Files:', meta.sessionGeneratedFiles.size);
+        });
+        console.log('\n');
+        prompt();
         return;
       }
 
@@ -80,15 +110,31 @@ async function main() {
           toolChoice: 'required'
         });
 
-        stopSpinner(true, 'Execution complete');
-
-        // Display AI response
-        console.log('\nAI Response:');
-        console.log(result.text);
+        stopSpinner(true, 'AI Response received');
 
         // Display execution results
         const toolResult = (result.toolResults?.[0] as any)?.result;
         if (toolResult) {
+          // Show what's being executed
+          const executionInfo = (result.toolCalls?.[0] as any)?.args;
+          if (executionInfo) {
+            console.log('\nExecuting in Docker sandbox:');
+            if (executionInfo.runApp) {
+              console.log(`Application: ${executionInfo.runApp.entryFile}`);
+              console.log(`Working directory: ${executionInfo.runApp.cwd}`);
+            } else {
+              console.log(`Language: ${executionInfo.language}`);
+              if (executionInfo.dependencies?.length > 0) {
+                console.log(`Dependencies: ${executionInfo.dependencies.join(', ')}`);
+              }
+              console.log('\nCode:');
+              console.log('```' + executionInfo.language);
+              console.log(executionInfo.code);
+              console.log('```\n');
+            }
+          }
+
+          console.log('\nOutput:');
           // Display stdout directly
           if (toolResult.stdout) {
             console.log(toolResult.stdout);
