@@ -370,6 +370,112 @@ yarn ts-node examples/benchmark-pool-python.ts
 
 Average times on a MacBook M2 Pro: **JS 40 ms / round**, **Python 60 ms / round** after first run (deps cached).
 
+## Interactive Shell Example
+
+The repository includes an interactive shell example that demonstrates how to use the code execution engine in an interactive way. The shell provides a user-friendly interface for executing code and managing containers.
+
+### Features
+
+- Persistent session with shared workspace
+- Automatic language selection (shell or Python by default)
+- Real-time execution feedback
+- Container history tracking
+- Special commands:
+  - `info` - Display session information and container history
+  - `quit` - Exit the shell
+
+### Example Usage
+
+```bash
+# Run the interactive shell
+yarn ts-node examples/interactive-shell-example.ts
+```
+
+Example session:
+```
+=== Interactive AI Shell ===
+
+Workspace Directory: /tmp/it_abc123
+Type your commands or AI prompts below.
+Special commands:
+  - "info" - Show session information and container history
+  - "quit" - Exit the shell
+
+> print numbers from 1 to 5
+AI Thinking... ✓ AI Response received
+
+Executing in Docker sandbox:
+Language: python
+
+Code:
+```python
+for i in range(1, 6):
+    print(i)
+```
+
+Output:
+1
+2
+3
+4
+5
+
+> create a plot using matplotlib
+AI Thinking... ✓ AI Response received
+
+Executing in Docker sandbox:
+Language: python
+Dependencies: matplotlib
+
+Code:
+```python
+import matplotlib.pyplot as plt
+import numpy as np
+
+x = np.linspace(0, 10, 100)
+y = np.sin(x)
+plt.plot(x, y)
+plt.savefig('plot.png')
+```
+
+Output:
+
+[Generated files: /workspace/plot.png]
+
+> info
+=== Session Information ===
+Session ID: interactive-abc123
+Created: 2024-03-14T12:34:56.789Z
+Last Executed: 2024-03-14T12:35:01.234Z
+Active: No
+
+Current Container:
+- Image: python:3.11-alpine
+- Running: No
+- Created: 2024-03-14T12:34:56.789Z
+- Last Executed: 2024-03-14T12:35:01.234Z
+
+Container History:
+Container 1:
+- Name: it_abc123
+- Image: python:3.11-alpine
+- Container ID: abc123def456
+- Created: 2024-03-14T12:34:56.789Z
+- Last Executed: 2024-03-14T12:35:01.234Z
+- Generated Files: 0
+```
+
+### Key Features
+
+1. **Shared Workspace**: Files created in one execution are available in subsequent executions
+2. **Container Management**: Automatic container creation and cleanup
+3. **Language Support**: Automatic language selection based on the task
+4. **Dependency Management**: Automatic installation of required packages
+5. **Session Information**: Detailed view of container history and session state
+6. **Real-time Feedback**: Clear display of execution progress and results
+
+The interactive shell is a great way to experiment with the code execution engine and understand its capabilities.
+
 ## Usage
 
 The main components of this project are:
