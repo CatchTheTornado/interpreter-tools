@@ -1,6 +1,6 @@
 import { generateText } from 'ai';
 import { openai } from '@ai-sdk/openai';
-import { createCodeExecutionTool } from '../src/ai-tool';
+import { createCodeExecutionTool } from '../src/code-execution-tool';
 
 (async () => {
   // Create tool with default settings (per_execution strategy)  - we set it to per_session to reuse the same container for multiple executions and to have access to the generated files

@@ -1,6 +1,6 @@
 import { generateText } from 'ai';
 import { openai } from "@ai-sdk/openai";
-import { codeExecutionTool, executionEngine } from '../src/ai-tool';
+import { codeExecutionTool, executionEngine } from '../src/code-execution-tool';
 executionEngine.setVerbosity('debug');
 
 

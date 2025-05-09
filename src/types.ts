@@ -16,6 +16,7 @@ export interface ExecutionOptions {
     stdout?: (data: string) => void;
     stderr?: (data: string) => void;
   };
+  workspaceSharing?: 'isolated' | 'shared';  // New option: 'isolated' (default) or 'shared'
 }
 
 export interface MountOptions {
@@ -38,6 +39,7 @@ export interface ExecutionResult {
   executionTime: number;
   workspaceDir: string;
   generatedFiles: string[];
+  sessionGeneratedFiles: string[]; // All files generated across all runs in the session
 }
 
 export interface ContainerPoolConfig {

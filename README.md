@@ -370,13 +370,120 @@ yarn ts-node examples/benchmark-pool-python.ts
 
 Average times on a MacBook M2 Pro: **JS 40 ms / round**, **Python 60 ms / round** after first run (deps cached).
 
+## Interactive Shell Example
+
+The repository includes an interactive shell example that demonstrates how to use the code execution engine in an interactive way. The shell provides a user-friendly interface for executing code and managing containers.
+
+### Features
+
+- Persistent session with shared workspace
+- Automatic language selection (shell or Python by default)
+- Real-time execution feedback
+- Container history tracking
+- Special commands:
+  - `info` - Display session information and container history
+  - `quit` - Exit the shell
+
+### Example Usage
+
+```bash
+# Run the interactive shell
+yarn ts-node examples/interactive-shell-example.ts
+```
+
+Example session:
+```
+=== Interactive AI Shell ===
+
+Workspace Directory: /tmp/it_abc123
+Type your commands or AI prompts below.
+Special commands:
+  - "info" - Show session information and container history
+  - "quit" - Exit the shell
+
+> print numbers from 1 to 5
+AI Thinking... ✓ AI Response received
+
+Executing in Docker sandbox:
+Language: python
+
+Code:
+```python
+for i in range(1, 6):
+    print(i)
+```
+
+Output:
+1
+2
+3
+4
+5
+
+> create a plot using matplotlib
+AI Thinking... ✓ AI Response received
+
+Executing in Docker sandbox:
+Language: python
+Dependencies: matplotlib
+
+Code:
+```python
+import matplotlib.pyplot as plt
+import numpy as np
+
+x = np.linspace(0, 10, 100)
+y = np.sin(x)
+plt.plot(x, y)
+plt.savefig('plot.png')
+```
+
+Output:
+
+[Generated files: /workspace/plot.png]
+
+> info
+=== Session Information ===
+Session ID: interactive-abc123
+Created: 2024-03-14T12:34:56.789Z
+Last Executed: 2024-03-14T12:35:01.234Z
+Active: No
+
+Current Container:
+- Image: python:3.11-alpine
+- Running: No
+- Created: 2024-03-14T12:34:56.789Z
+- Last Executed: 2024-03-14T12:35:01.234Z
+
+Container History:
+Container 1:
+- Name: it_abc123
+- Image: python:3.11-alpine
+- Container ID: abc123def456
+- Created: 2024-03-14T12:34:56.789Z
+- Last Executed: 2024-03-14T12:35:01.234Z
+- Generated Files: 0
+```
+
+### Key Features
+
+1. **Shared Workspace**: Files created in one execution are available in subsequent executions
+2. **Container Management**: Automatic container creation and cleanup
+3. **Language Support**: Automatic language selection based on the task
+4. **Dependency Management**: Automatic installation of required packages
+5. **Session Information**: Detailed view of container history and session state
+6. **Real-time Feedback**: Clear display of execution progress and results
+
+The interactive shell is a great way to experiment with the code execution engine and understand its capabilities.
+
 ## Usage
 
 The main components of this project are:
 
 1. `ExecutionEngine`: Manages code execution in containers
-2. `ContainerManager`: Handles Docker container lifecycle
-3. `CodeExecutionTool`: Provides a high-level interface for executing code
+2. `SessionManager`: Manages session state, container metadata, and container history across executions
+3. `ContainerManager`: Handles Docker container lifecycle
+4. `CodeExecutionTool`: Provides a high-level interface for executing code
 
 ### Basic Usage
 
@@ -385,6 +492,7 @@ import { createCodeExecutionTool } from 'interpreter-tools';
 
 const { codeExecutionTool }  = createCodeExecutionTool();
 
+// Isolated workspace (default)
 const result = await codeExecutionTool.execute({
   language: 'javascript',
   code: 'console.log("Hello, World!");',
@@ -393,17 +501,35 @@ const result = await codeExecutionTool.execute({
     stderr: (data) => console.error(data)
   }
 });
+
+// Shared workspace between executions
+const result2 = await codeExecutionTool.execute({
+  language: 'javascript',
+  code: 'console.log("Hello again!");',
+  workspaceSharing: 'shared'  // Share workspace between executions
+});
 ```
+
+The `workspaceSharing` option controls how workspaces are managed:
+- `isolated` (default): Each execution gets its own workspace
+- `shared`: All executions in a session share the same workspace, allowing file persistence between runs
+
+This is particularly useful when you need to:
+- Share files between multiple executions
+- Maintain state across executions
+- Accumulate generated files
+- Build up a workspace over multiple steps
 
 ## Documentation
 
 ### Architecture Overview
 
-Interpreter Tools is composed of three core layers:
+Interpreter Tools is composed of four core layers:
 
 | Layer | Responsibility |
 |-------|---------------|
 | **ExecutionEngine** | High-level façade that orchestrates container lifecycle, dependency caching, and code execution. |
+| **SessionManager** | Manages session state, container metadata, and container history across executions. |
 | **ContainerManager** | Low-level wrapper around Dockerode that creates, starts, pools, and cleans containers. |
 | **LanguageRegistry** | Pluggable store of `LanguageConfig` objects that describe how to build/run code for each language. |
 
@@ -413,12 +539,13 @@ All user-facing helpers (e.g. the `codeExecutionTool` for AI agents) are thin wr
 graph TD;
   subgraph Runtime
     A[ExecutionEngine]
-    B[ContainerManager]
-    C[Docker]
+    B[SessionManager]
+    C[ContainerManager]
+    D[Docker]
   end
-  D[LanguageRegistry]
-  A --> B --> C
-  A --> D
+  E[LanguageRegistry]
+  A --> B --> C --> D
+  A --> E
 ```
 
 ---
@@ -434,11 +561,54 @@ createSession(config: SessionConfig): Promise<string>
 executeCode(sessionId: string, options: ExecutionOptions): Promise<ExecutionResult>
 cleanupSession(sessionId: string): Promise<void>
 cleanup(): Promise<void>
+getSessionInfo(sessionId: string): Promise<SessionInfo>
 ```
 
 * **SessionConfig** – chooses a `ContainerStrategy` (`PER_EXECUTION`, `POOL`, `PER_SESSION`) and passes a `containerConfig` (image, env, mounts, limits).
 * **ExecutionOptions** – language, code snippet, optional dependencies, stream handlers, etc.
 * **ExecutionResult** – `{ stdout, stderr, exitCode, executionTime }`.
+* **SessionInfo** – comprehensive session information including:
+  ```typescript
+  interface SessionInfo {
+    sessionId: string;
+    config: SessionConfig;
+    currentContainer: {
+      container: Docker.Container | undefined;
+      meta: ContainerMeta | undefined;
+    };
+    containerHistory: ContainerMeta[];
+    createdAt: Date;
+    lastExecutedAt: Date | null;
+    isActive: boolean;
+  }
+  ```
+
+#### Container Metadata
+
+Each container's state is tracked through the `ContainerMeta` interface:
+
+```typescript
+interface ContainerMeta {
+  sessionId: string;
+  depsInstalled: boolean;
+  depsChecksum: string | null;
+  baselineFiles: Set<string>;
+  workspaceDir: string;
+  generatedFiles: Set<string>;
+  sessionGeneratedFiles: Set<string>;
+  isRunning: boolean;
+  createdAt: Date;
+  lastExecutedAt: Date | null;
+  containerId: string;
+}
+```
+
+This metadata provides:
+- Dependency installation status and checksums
+- File tracking (baseline, generated, session-generated)
+- Container state (running/stopped)
+- Timestamps (creation, last execution)
+- Container identification
 
 #### `createCodeExecutionTool()`
 
@@ -480,150 +650,4 @@ interface LanguageConfig {
 
 ### Adding a New Language
 
-1. Create a `LanguageConfig` object (see the [Ruby example](#extending-with-new-languages-ruby-example)).
-2. Call `LanguageRegistry.register(config)` **once** at startup.
-3. Provide a suitable Docker image that has the runtime installed.
-
-No changes to `ExecutionEngine` are required.
-
----
-
-### Container Strategies
-
-| Strategy | Description | When to use |
-|----------|-------------|-------------|
-| **PER_EXECUTION** | New container per snippet; removed immediately. | Maximum isolation; slowest. |
-| **POOL** | Containers are pooled per session and reused—workspace is wiped between runs. | Best latency / resource trade-off for chat bots. |
-| **PER_SESSION** | One dedicated container for the whole session; not pooled. | Long-running interactive notebooks. |
-
----
-
-### Mounts & Environment Variables
-
-`containerConfig` accepts:
-
-```typescript
-{
-  image?: string;            // overrides language default
-  mounts?: ContainerMount[]; // { type: 'directory' | 'tmpfs', source, target }
-  environment?: Record<string, string>;
-  cpuLimit?: string;         // e.g. '0.5'
-  memoryLimit?: string;      // e.g. '512m'
-}
-```
-
-### Per-Execution Resource Limits
-
-`ExecutionOptions` let you override CPU and memory **for a single run**:
-
-```typescript
-await engine.executeCode(id, {
-  language: 'python',
-  code: 'print(\"hi\")',
-  cpuLimit: '0.5',       // half a CPU core
-  memoryLimit: '256m'    // 256 MB RAM
-});
-```
-
-Under the hood the engine calls `container.update({ CpuPeriod, CpuQuota, Memory })` just before execution, so the limits apply even when pooling.
-
----
-
-### Streaming Output
-
-Pass `streamOutput: { stdout?, stderr? }` in `ExecutionOptions` to receive data chunks in real time while the process runs.
-
-```typescript
-await engine.executeCode(id, {
-  language: 'shell',
-  code: 'for i in 1 2 3; do echo $i; sleep 1; done',
-  streamOutput: {
-    stdout: (d) => process.stdout.write(d)
-  }
-});
-```
-
----
-
-### Injecting Files Into the Workspace
-
-Sometimes your code needs additional assets (datasets, JSON files, images, etc.). There are **two primary ways** to make them available inside the container:
-
-1. **Mount a host directory** – supply a `mounts` array in `containerConfig` when you create a session. This is the easiest way to share many files or large directories.
-
-   ```typescript
-   const sessionId = await engine.createSession({
-     strategy: ContainerStrategy.PER_EXECUTION,
-     containerConfig: {
-       image: 'python:3.11-alpine',
-       mounts: [
-         {
-           type: 'directory',                 // always "directory" for now
-           source: path.resolve(__dirname, 'assets'), // host path
-           target: '/workspace/assets'        // inside the container
-         }
-       ]
-     }
-   });
-   ```
-
-2. **Programmatically copy / create individual files** – use one of the helper methods that work *after* you have a session:
-
-   ```typescript
-   // (a) copy an existing file from the host
-   await engine.copyFileIntoWorkspace(sessionId, './input/data.json', 'data.json');
-
-   // (b) create a new file from a base64-encoded string
-   await engine.addFileFromBase64(
-     sessionId,
-     'notes/hello.txt',
-     Buffer.from('hi there').toString('base64')
-   );
-   ```
-
-Both helpers write directly to `/workspace`, so your script can reference the files with just the relative path.
-
----
-
-### Handling Generated Files
-
-Interpreter Tools automatically tracks new files created in `/workspace` during an execution:
-
-* `ExecutionResult.generatedFiles` – list of absolute paths to the files created in that run.
-* `ExecutionResult.workspaceDir` – host path of the temporary workspace directory.
-
-Example:
-
-```typescript
-const result = await engine.executeCode(sessionId, {
-  language: 'python',
-  code: 'with open("report.txt", "w") as f:\n    f.write("done")',
-});
-
-console.log('New files:', result.generatedFiles);
-```
-
-You can retrieve file contents with:
-
-```typescript
-const pngBuffer = await engine.readFileBinary(sessionId, 'charts/plot.png');
-fs.writeFileSync('plot.png', pngBuffer);
-```
-
-#### Keeping generated files after cleanup
-
-By default, calling `engine.cleanupSession()` or `engine.cleanup()` removes the containers *and* their workspaces. Pass `true` to keep only the files that were detected as generated:
-
-```typescript
-await engine.cleanupSession(sessionId, /* keepGenerated = */ true);
-```
-
-All non-generated files are removed, the generated ones stay on disk so you can move or process them later. If you mounted a host directory, the files are already on the host and no special flag is needed.
-
----
-
-Happy hacking! 
-
-## License
-
-MIT 
+1. Create a `
