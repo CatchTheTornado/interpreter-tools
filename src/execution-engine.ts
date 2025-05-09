@@ -19,18 +19,73 @@ interface ContainerMeta {
   sessionGeneratedFiles: Set<string>;
 }
 
+class SessionManager {
+  private sessionConfigs: Map<string, SessionConfig>;
+  private sessionContainers: Map<string, Docker.Container>;
+  private containerMeta: Map<string, ContainerMeta>;
+
+  constructor() {
+    this.sessionConfigs = new Map();
+    this.sessionContainers = new Map();
+    this.containerMeta = new Map();
+  }
+
+  getSessionConfig(sessionId: string): SessionConfig | undefined {
+    return this.sessionConfigs.get(sessionId);
+  }
+
+  getContainer(sessionId: string): Docker.Container | undefined {
+    return this.sessionContainers.get(sessionId);
+  }
+
+  getContainerMeta(containerId: string): ContainerMeta | undefined {
+    return this.containerMeta.get(containerId);
+  }
+
+  setSessionConfig(sessionId: string, config: SessionConfig): void {
+    this.sessionConfigs.set(sessionId, config);
+  }
+
+  setContainer(sessionId: string, container: Docker.Container): void {
+    this.sessionContainers.set(sessionId, container);
+  }
+
+  setContainerMeta(containerId: string, meta: ContainerMeta): void {
+    this.containerMeta.set(containerId, meta);
+  }
+
+  hasSession(sessionId: string): boolean {
+    return this.sessionConfigs.has(sessionId);
+  }
+
+  deleteSession(sessionId: string): void {
+    const container = this.sessionContainers.get(sessionId);
+    if (container) {
+      this.containerMeta.delete(container.id);
+      this.sessionContainers.delete(sessionId);
+    }
+    this.sessionConfigs.delete(sessionId);
+  }
+
+  clear(): void {
+    this.sessionConfigs.clear();
+    this.sessionContainers.clear();
+    this.containerMeta.clear();
+  }
+
+  getSessionIds(): string[] {
+    return Array.from(this.sessionConfigs.keys());
+  }
+}
+
 export class ExecutionEngine {
   private containerManager: ContainerManager;
-  private sessionContainers: Map<string, Docker.Container>;
-  private sessionConfigs: Map<string, SessionConfig>;
-  private containerMeta: Map<string, ContainerMeta>;
+  private sessionManager: SessionManager;
   private verbosity: 'info' | 'debug';
 
   constructor() {
     this.containerManager = new ContainerManager();
-    this.sessionContainers = new Map();
-    this.sessionConfigs = new Map();
-    this.containerMeta = new Map();
+    this.sessionManager = new SessionManager();
     this.verbosity = 'info';
   }
 
@@ -42,6 +97,14 @@ export class ExecutionEngine {
     if (this.verbosity === 'debug') {
       console.log('[ExecutionEngine]', ...args);
     }
+  }
+
+  private calculateDepsChecksum(dependencies: string[] | undefined): string {
+    if (!dependencies || dependencies.length === 0) {
+      return '';
+    }
+    const sortedDeps = [...dependencies].sort();
+    return crypto.createHash('sha256').update(sortedDeps.join('|')).digest('hex');
   }
 
   private async prepareCodeFile(options: ExecutionOptions, tempDir: string): Promise<void> {
@@ -109,9 +172,14 @@ export class ExecutionEngine {
     }
 
     // Get container metadata and calculate new dependency checksum
-    const meta = this.containerMeta.get(container.id);
+    const meta = this.sessionManager.getContainerMeta(container.id);
     const newDepsChecksum = this.calculateDepsChecksum(options.dependencies);
     const depsAlreadyInstalled = Boolean(meta?.depsInstalled && meta?.depsChecksum === newDepsChecksum);
+
+    // Save current baseline before execution
+    if (meta) {
+      meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
+    }
 
     if (options.runApp) {
       // Validate that the working directory is mounted
@@ -195,11 +263,6 @@ EOL`],
     }
 
     this.logDebug('Executing command:', command.join(' '));
-
-    // Save current baseline before execution
-    if (meta) {
-      meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
-    }
 
     return new Promise((resolve, reject) => {
       container.exec({
@@ -292,7 +355,7 @@ EOL`],
   async createSession(config: SessionConfig): Promise<string> {
     const sessionId = config.sessionId ?? uuidv4();
 
-    if (this.sessionConfigs.has(sessionId)) {
+    if (this.sessionManager.hasSession(sessionId)) {
       if (config.enforceNewSession) {
         throw new Error(`Session ID ${sessionId} already exists`);
       }
@@ -302,7 +365,7 @@ EOL`],
 
     this.logDebug('Creating session', sessionId, 'strategy', config.strategy);
 
-    this.sessionConfigs.set(sessionId, config);
+    this.sessionManager.setSessionConfig(sessionId, config);
 
     if (config.strategy === ContainerStrategy.PER_SESSION) {
       const containerName = `it_${uuidv4()}`;
@@ -322,8 +385,8 @@ EOL`],
           }
         ]
       });
-      this.sessionContainers.set(sessionId, container);
-      this.containerMeta.set(container.id, {
+      this.sessionManager.setContainer(sessionId, container);
+      this.sessionManager.setContainerMeta(container.id, {
         sessionId,
         depsInstalled: false,
         depsChecksum: null,
@@ -338,7 +401,7 @@ EOL`],
   }
 
   async executeCode(sessionId: string, options: ExecutionOptions): Promise<ExecutionResult> {
-    const config = this.sessionConfigs.get(sessionId);
+    const config = this.sessionManager.getSessionConfig(sessionId);
     if (!config) {
       throw new Error('Invalid session ID');
     }
@@ -367,8 +430,8 @@ EOL`],
               }
             ]
           });
-          this.sessionContainers.set(sessionId, container);
-          this.containerMeta.set(container.id, {
+          this.sessionManager.setContainer(sessionId, container);
+          this.sessionManager.setContainerMeta(container.id, {
             sessionId,
             depsInstalled: false,
             depsChecksum: null,
@@ -382,7 +445,7 @@ EOL`],
 
         case ContainerStrategy.POOL: {
           // Check if a container is already assigned to this session
-          let sessionContainer = this.sessionContainers.get(sessionId);
+          let sessionContainer = this.sessionManager.getContainer(sessionId);
           if (!sessionContainer) {
             const expectedImage = config.containerConfig.image ? config.containerConfig.image : this.getContainerImage(options.language);
             const pooledContainer = await this.containerManager.getContainerFromPool(expectedImage);
@@ -409,13 +472,13 @@ EOL`],
             } else {
               sessionContainer = pooledContainer;
             }
-            this.sessionContainers.set(sessionId, sessionContainer);
-            const existingMeta = this.containerMeta.get(sessionContainer.id);
+            this.sessionManager.setContainer(sessionId, sessionContainer);
+            const existingMeta = this.sessionManager.getContainerMeta(sessionContainer.id);
             if (existingMeta) {
               existingMeta.sessionId = sessionId;
               if (codePath.length) existingMeta.workspaceDir = codePath;
             } else {
-              this.containerMeta.set(sessionContainer.id, {
+              this.sessionManager.setContainerMeta(sessionContainer.id, {
                 sessionId,
                 depsInstalled: false,
                 depsChecksum: null,
@@ -431,7 +494,7 @@ EOL`],
         }
 
         case ContainerStrategy.PER_SESSION: {
-          const sessionContainer = this.sessionContainers.get(sessionId);
+          const sessionContainer = this.sessionManager.getContainer(sessionId);
           if (!sessionContainer) {
             throw new Error('Session container not found');
           }
@@ -452,7 +515,7 @@ EOL`],
 
       // For PER_SESSION strategy prepare workspace only on first execution
       if (config.strategy === ContainerStrategy.PER_SESSION) {
-        const metaPrepare = this.containerMeta.get(container.id);
+        const metaPrepare = this.sessionManager.getContainerMeta(container.id);
         if (metaPrepare && metaPrepare.baselineFiles.size === 0) {
           await this.prepareCodeFile(options, codePath);
           metaPrepare.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
@@ -465,8 +528,7 @@ EOL`],
         // Do nothing here; container remains assigned for session lifetime.
       } else if (config.strategy === ContainerStrategy.PER_EXECUTION) {
         await this.containerManager.removeContainerAndDir(container);
-        this.containerMeta.delete(container.id);
-        this.sessionContainers.delete(sessionId);
+        this.sessionManager.deleteSession(sessionId);
       }
 
       return result;
@@ -477,8 +539,8 @@ EOL`],
 
   async cleanupSession(sessionId: string, keepGeneratedFiles: boolean = false): Promise<void> {
     this.logDebug('Cleaning up session', sessionId);
-    const container = this.sessionContainers.get(sessionId);
-    const config = this.sessionConfigs.get(sessionId);
+    const container = this.sessionManager.getContainer(sessionId);
+    const config = this.sessionManager.getSessionConfig(sessionId);
     this.logDebug('Keep generated files?', keepGeneratedFiles);
     if (container) {
       if (config?.strategy === ContainerStrategy.POOL) {
@@ -488,7 +550,7 @@ EOL`],
         let deleteDir = true;
         if (keepGeneratedFiles) {
           try {
-            const metaForCleanup = this.containerMeta.get(container.id);
+            const metaForCleanup = this.sessionManager.getContainerMeta(container.id);
             const generatedArr = metaForCleanup ? Array.from(metaForCleanup.sessionGeneratedFiles) : [];
             this.logDebug('Keeping generated files', generatedArr);
             if (generatedArr.length > 0) {
@@ -501,15 +563,13 @@ EOL`],
         }
         await this.containerManager.removeContainerAndDir(container, deleteDir);
       }
-      this.sessionContainers.delete(sessionId);
-      this.containerMeta.delete(container.id);
+      this.sessionManager.deleteSession(sessionId);
     }
-    this.sessionConfigs.delete(sessionId);
   }
 
   async cleanup(keepGeneratedFiles: boolean = false): Promise<void> {
     // Clean each session respecting generated files flag
-    for (const sid of Array.from(this.sessionContainers.keys())) {
+    for (const sid of this.sessionManager.getSessionIds()) {
       await this.cleanupSession(sid, keepGeneratedFiles);
     }
     // Finally, let container manager perform global cleanup (this only affects containers
@@ -517,13 +577,11 @@ EOL`],
     if (!keepGeneratedFiles) {
       await this.containerManager.cleanup();
     }
-    this.sessionContainers.clear();
-    this.sessionConfigs.clear();
-    this.containerMeta.clear();
+    this.sessionManager.clear();
   }
 
-  private  getWorkspaceDir(container: Docker.Container): string {
-    const meta = this.containerMeta.get(container.id);
+  private getWorkspaceDir(container: Docker.Container): string {
+    const meta = this.sessionManager.getContainerMeta(container.id);
     if (meta) return meta.workspaceDir;
     const cnameRaw = (container as any).name ?? '';
     const cname = cnameRaw.startsWith('/') ? cnameRaw.slice(1) : cnameRaw;
@@ -544,9 +602,6 @@ EOL`],
     return results;
   }
 
-  /**
-   * Remove all files in the workspace except those present in generatedFiles set.
-   */
   private cleanWorkspaceKeepGenerated(container: Docker.Container, generatedFiles: Set<string>): void {
     const workspaceDir = this.getWorkspaceDir(container);
     const all = this.listAllFiles(workspaceDir);
@@ -571,19 +626,19 @@ EOL`],
 
   // Public helpers
   async listWorkspaceFiles(sessionId: string, onlyGenerated = false): Promise<string[]> {
-    const container = this.sessionContainers.get(sessionId);
+    const container = this.sessionManager.getContainer(sessionId);
     if (!container) throw new Error('Session not found');
     const workspaceDir = this.getWorkspaceDir(container);
     const currentFiles = this.listAllFiles(workspaceDir);
 
     if (!onlyGenerated) return currentFiles;
 
-    const baseline = this.containerMeta.get(container.id)?.baselineFiles ?? new Set<string>();
+    const baseline = this.sessionManager.getContainerMeta(container.id)?.baselineFiles ?? new Set<string>();
     return currentFiles.filter(p => p.startsWith(workspaceDir) && !baseline.has(p));
   }
 
   async addFileFromBase64(sessionId: string, relativePath: string, dataBase64: string): Promise<void> {
-    const container = this.sessionContainers.get(sessionId);
+    const container = this.sessionManager.getContainer(sessionId);
     if (!container) throw new Error('Session not found');
     const workspaceDir = this.getWorkspaceDir(container);
     const fullPath = path.join(workspaceDir, relativePath);
@@ -593,7 +648,7 @@ EOL`],
   }
 
   async copyFileIntoWorkspace(sessionId: string, localPath: string, destRelativePath: string): Promise<void> {
-    const container = this.sessionContainers.get(sessionId);
+    const container = this.sessionManager.getContainer(sessionId);
     if (!container) throw new Error('Session not found');
     const workspaceDir = this.getWorkspaceDir(container);
     const dest = path.join(workspaceDir, destRelativePath);
@@ -602,7 +657,7 @@ EOL`],
   }
 
   async readFileBase64(sessionId: string, relativePath: string): Promise<string> {
-    const container = this.sessionContainers.get(sessionId);
+    const container = this.sessionManager.getContainer(sessionId);
     if (!container) throw new Error('Session not found');
     const workspaceDir = this.getWorkspaceDir(container);
     const fullPath = path.join(workspaceDir, relativePath);
@@ -610,18 +665,9 @@ EOL`],
   }
 
   async readFileBinary(sessionId: string, relativePath: string): Promise<Buffer> {
-    const container = this.sessionContainers.get(sessionId);
+    const container = this.sessionManager.getContainer(sessionId);
     if (!container) throw new Error('Session not found');
     const workspaceDir = this.getWorkspaceDir(container);
     return fs.readFileSync(path.join(workspaceDir, relativePath));
-  }
-
-  private calculateDepsChecksum(dependencies: string[] | undefined): string {
-    if (!dependencies || dependencies.length === 0) {
-      return '';
-    }
-    // Sort dependencies to ensure consistent checksum regardless of order
-    const sortedDeps = [...dependencies].sort();
-    return crypto.createHash('sha256').update(sortedDeps.join('|')).digest('hex');
   }
 } 
