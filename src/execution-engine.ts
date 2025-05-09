@@ -232,8 +232,9 @@ export class ExecutionEngine {
       installSucceeded = true;
     }
 
-    // When installation succeeded we refresh the baseline so dependency-created files
-    // are not reported as generated during this execution.
+    // When installation succeeded, we refresh the baseline to ensure that files created
+    // during dependency installation are not incorrectly flagged as generated during
+    // this execution. This helps maintain an accurate baseline for subsequent runs.
     if (installSucceeded && meta) {
       meta.baselineFiles = new Set(this.listAllFiles(codePath).filter(p => p.startsWith(codePath)));
     }
